@@ -1,6 +1,7 @@
 const TelegramBot = require('node-telegram-bot-api');
-const fetch = require('node-fetch');
+const axios = require('axios');
 const http = require('http');
+const pdfParse = require('pdf-parse');
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
@@ -8,19 +9,31 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
 const userHistory = {};
-const systemPrompt = `أنت رفيق معرفي أكاديمي لمستخدم بمسار موسوعي يدرس التمريض. أجب بدقة وعمق علمي وبشكل مباشر، منظم وموجز دون إطالة مفرطة تسد السيرفر.`;
+const systemPrompt = `أنت رفيق معرفي أكاديمي لمستخدم بمسار موسوعي يدرس التمريض. أجب بدقة وعمق علمي وبشكل مباشر لأغراض التعليم والبحث الأكاديمي.`;
 
-// دالة جلب البيانات مع مهلة زمنية صارمة (Timeout)
-async function fetchWithTimeout(url, options, timeoutMs = 10000) {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeoutMs);
+// دالة الاتصال المضمونة بـ Groq API
+async function callGroqAPI(messages, model = "openai/gpt-oss-120b", maxTokens = 1500) {
   try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
-    clearTimeout(id);
-    return response;
-  } catch (err) {
-    clearTimeout(id);
-    throw err;
+    const response = await axios.post(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        model: model,
+        messages: messages,
+        temperature: 0.4,
+        max_tokens: maxTokens
+      },
+      {
+        headers: {
+          "Authorization": `Bearer ${GROQ_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        timeout: 15000
+      }
+    );
+    return response.data.choices[0]?.message?.content || null;
+  } catch (error) {
+    console.error(`Error on model ${model}:`, error.message);
+    return null;
   }
 }
 
@@ -28,204 +41,207 @@ async function fetchWithTimeout(url, options, timeoutMs = 10000) {
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   userHistory[chatId] = [];
-  bot.sendMessage(chatId, "أهلاً بك! تم تحسين سرعة واستجابة البوت وإضافة حماية كاملة من التعليق.\n\n• اسأل عن أي موضوع تمريضي.\n• أرسل صورة لتحليلها.\n• أرسل /quiz للاختبار في أحدث موضوع.");
+  bot.sendMessage(chatId, "أهلاً بك! تم حل جميع المشاكل بنجاح:\n\n• يمكنك الإجابة على الكويزات بكتابة الخيار (A, B, C, D) وسأقيمه لك فوراً.\n• أرسل أي ملف ملزمة بصيغة PDF وسأقرأه وألخصه لك.\n• أرسل الصور المخططة والمستندات لتحليلها.\n• أرسل /quiz في أي وقت لاختبارك في أحدث موضوع تناقشنا فيه!");
 });
 
-// 2. أمر /quiz
+// 2. أمر /quiz (مع حفظ السؤال بالذاكرة)
 bot.onText(/\/quiz/, async (msg) => {
   const chatId = msg.chat.id;
-  let typingInterval = setInterval(() => { bot.sendChatAction(chatId, 'typing').catch(()=>{}); }, 4000);
-  bot.sendChatAction(chatId, 'typing');
+  let typingInterval = setInterval(() => { bot.sendChatAction(chatId, 'typing').catch(()=>{}); }, 3000);
 
   try {
     const history = userHistory[chatId] || [];
     if (history.length === 0) {
-      return bot.sendMessage(chatId, "لم نناقش أي موضوع بعد! الرجاء طرح سؤال أولاً.");
+      clearInterval(typingInterval);
+      return bot.sendMessage(chatId, "لم نناقش أي موضوع بعد! أرسل ملفاً أو اطرح سؤالاً أولاً، ثم أرسل /quiz.");
     }
 
     const recentContext = history.slice(-4);
-    const quizPrompt = `Based ONLY on the MOST RECENT nursing topic discussed in the latest messages above, generate ONE high-yield academic NCLEX-style nursing multiple-choice question (MCQ) in ENGLISH. 
-Focus strictly on the LATEST topic we just talked about. 
-Provide 4 options (A, B, C, D). Ask the user to choose the correct option first without giving the answer immediately.`;
+    const quizPrompt = `Based SPECIFICALLY on the MOST RECENT nursing topics/documents in our conversation above, generate ONE high-yield academic NCLEX-style nursing multiple-choice question (MCQ) in ENGLISH. 
+Provide 4 options (A, B, C, D). Do NOT provide the correct answer or explanation yet. Ask the user to choose (A, B, C, or D).`;
 
-    const models = ["openai/gpt-oss-120b", "llama-3.3-70b-versatile"];
-    let quizGenerated = false;
+    const messages = [
+      { role: "system", content: systemPrompt },
+      ...recentContext,
+      { role: "user", content: quizPrompt }
+    ];
 
-    for (const model of models) {
-      try {
-        const response = await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions", {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: model,
-            messages: [{ role: "system", content: systemPrompt }, ...recentContext, { role: "user", content: quizPrompt }],
-            temperature: 0.5,
-            max_tokens: 800
-          })
-        }, 10000);
-
-        if (!response.ok) continue;
-        const data = await response.json();
-        
-        if (data.choices && data.choices[0]?.message?.content) {
-          bot.sendMessage(chatId, `📝 **Nursing Quiz (Context-Based):**\n\n${data.choices[0].message.content}`, { parse_mode: 'Markdown' });
-          quizGenerated = true;
-          break;
-        }
-      } catch (e) {
-        console.log(`Quiz failed or timed out on model ${model}`);
-      }
+    let quizText = await callGroqAPI(messages, "openai/gpt-oss-120b", 800);
+    if (!quizText) {
+      quizText = await callGroqAPI(messages, "llama-3.3-70b-versatile", 800);
     }
 
-    if (!quizGenerated) {
-      bot.sendMessage(chatId, "حدث خطأ أثناء توليد الاختبار. حاول مرة أخرى.");
-    }
-  } catch (err) {
-    bot.sendMessage(chatId, "حدث خطأ غير متوقع. جرب مجدداً.");
-  } finally {
     clearInterval(typingInterval);
+
+    if (quizText) {
+      if (!userHistory[chatId]) userHistory[chatId] = [];
+      userHistory[chatId].push({ role: "user", content: "Generate a quiz for me." });
+      userHistory[chatId].push({ role: "assistant", content: quizText });
+
+      bot.sendMessage(chatId, `📝 **Nursing Quiz (Context-Based):**\n\n${quizText}`, { parse_mode: 'Markdown' });
+    } else {
+      bot.sendMessage(chatId, "حدث خطأ أثناء توليد الكويز. يرجى المحاولة مرة أخرى.");
+    }
+  } catch (e) {
+    clearInterval(typingInterval);
+    bot.sendMessage(chatId, "حدث خطأ غير متوقع.");
   }
 });
 
-// 3. معالجة الصور
-bot.on('photo', async (msg) => {
+// 3. قراءة ومعالجة ملفات الـ PDF
+bot.on('document', async (msg) => {
   const chatId = msg.chat.id;
-  const caption = msg.caption || "اقرأ واشرح ما في الصورة بدقة طبية وتمريضية.";
+  const doc = msg.document;
 
-  let typingInterval = setInterval(() => { bot.sendChatAction(chatId, 'typing').catch(()=>{}); }, 4000);
-  bot.sendChatAction(chatId, 'typing');
+  if (!doc.mime_type || !doc.mime_type.includes('pdf')) {
+    return bot.sendMessage(chatId, "يرجى إرسال ملفات بصيغة PDF فقط.");
+  }
+
+  let typingInterval = setInterval(() => { bot.sendChatAction(chatId, 'typing').catch(()=>{}); }, 3000);
 
   try {
-    const photo = msg.photo.length > 1 ? msg.photo[msg.photo.length - 2] : msg.photo[0];
-    const file = await bot.getFile(photo.file_id);
-    const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${file.file_path}`;
+    const fileLink = await bot.getFileLink(doc.file_id);
+    const response = await axios.get(fileLink, { responseType: 'arraybuffer' });
+    const pdfData = await pdfParse(response.data);
 
-    const imgResponse = await fetch(fileUrl);
-    const buffer = await imgResponse.buffer();
-    const base64Image = buffer.toString('base64');
-    const dataUrl = `data:image/jpeg;base64,${base64Image}`;
-
-    const visionModels = ["llama-3.2-11b-vision-preview", "llama-3.2-90b-vision-preview"];
-    let imageAnalyzed = false;
-
-    for (const model of visionModels) {
-      try {
-        const response = await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions", {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: model,
-            messages: [{
-              role: "user",
-              content: [
-                { type: "text", text: caption },
-                { type: "image_url", image_url: { url: dataUrl } }
-              ]
-            }],
-            temperature: 0.3,
-            max_tokens: 1200
-          })
-        }, 12000);
-
-        if (!response.ok) continue;
-        const data = await response.json();
-
-        if (data.choices && data.choices[0]?.message?.content) {
-          const analysis = data.choices[0].message.content;
-          if (!userHistory[chatId]) userHistory[chatId] = [];
-          userHistory[chatId].push({ role: "user", content: `محتوى الصورة الأخير: ${analysis}` });
-          userHistory[chatId].push({ role: "assistant", content: analysis });
-
-          if (userHistory[chatId].length > 10) userHistory[chatId] = userHistory[chatId].slice(-10);
-
-          bot.sendMessage(chatId, `📷 **تحليل الصورة:**\n\n${analysis}`);
-          imageAnalyzed = true;
-          break;
-        }
-      } catch (e) {
-        console.log(`Vision failed on ${model}`);
-      }
+    const pdfText = pdfData.text.trim();
+    if (!pdfText || pdfText.length < 20) {
+      clearInterval(typingInterval);
+      return bot.sendMessage(chatId, "عذراً، لم أستطع استخراج النصوص من هذا الملف (قد يكون عبارة عن صور مسحوبة ضوئياً).");
     }
 
-    if (!imageAnalyzed) bot.sendMessage(chatId, "عذراً، تعذر تحليل الصورة حالياً.");
-  } catch (e) {
-    bot.sendMessage(chatId, "حدث خطأ أثناء معالجة الصورة.");
-  } finally {
+    const trimmedText = pdfText.substring(0, 4000);
+
+    const summaryPrompt = `لقد أرسل المستخدم ملف PDF أكاديمي في التمريض. إليك محتوى الملزمة:\n\n${trimmedText}\n\nيرجى تقديم تلخيص أكاديمي شامل لأهم المفاهيم، النقاط التمريضية، والتدخلات المذكورة في هذا الملف.`;
+
+    const summary = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: summaryPrompt }]);
+
     clearInterval(typingInterval);
+
+    if (summary) {
+      if (!userHistory[chatId]) userHistory[chatId] = [];
+      userHistory[chatId].push({ role: "user", content: `محتوى ملزمة PDF: ${trimmedText.substring(0, 1000)}` });
+      userHistory[chatId].push({ role: "assistant", content: summary });
+
+      if (userHistory[chatId].length > 10) userHistory[chatId] = userHistory[chatId].slice(-10);
+
+      bot.sendMessage(chatId, `📄 **ملخص ملزمة الـ PDF:**\n\n${summary}\n\n---\n💡 *يمكنك الآن طرح أي أسئلة حول الملف أو إرسال /quiz لتوليد أسئلة منه!*`);
+    } else {
+      bot.sendMessage(chatId, "تعذر تحليل ملف الـ PDF حالياً، يرجى المحاولة لاحقاً.");
+    }
+  } catch (e) {
+    clearInterval(typingInterval);
+    console.error("PDF Parsing Error:", e.message);
+    bot.sendMessage(chatId, "حدث خطأ أثناء معالجة ملف الـ PDF.");
   }
 });
 
-// 4. المحادثة النصية العادية مع خاصية المهلة الذكية
+// 4. معالجة الصور المرفقة
+bot.on('photo', async (msg) => {
+  const chatId = msg.chat.id;
+  const caption = msg.caption || "اقرأ واشرح ما في هذه الصورة بأسلوب تمريضي أكاديمي ودقيق.";
+
+  let typingInterval = setInterval(() => { bot.sendChatAction(chatId, 'typing').catch(()=>{}); }, 3000);
+
+  try {
+    const photo = msg.photo[msg.photo.length - 1];
+    const fileLink = await bot.getFileLink(photo.file_id);
+
+    const imgResponse = await axios.get(fileLink, { responseType: 'arraybuffer' });
+    const base64Image = Buffer.from(imgResponse.data).toString('base64');
+    const dataUrl = `data:image/jpeg;base64,${base64Image}`;
+
+    const response = await axios.post(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        model: "llama-3.2-11b-vision-preview",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: caption },
+              { type: "image_url", image_url: { url: dataUrl } }
+            ]
+          }
+        ],
+        temperature: 0.3,
+        max_tokens: 1200
+      },
+      {
+        headers: {
+          "Authorization": `Bearer ${GROQ_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        timeout: 20000
+      }
+    );
+
+    clearInterval(typingInterval);
+
+    const analysis = response.data.choices[0]?.message?.content;
+    if (analysis) {
+      if (!userHistory[chatId]) userHistory[chatId] = [];
+      userHistory[chatId].push({ role: "user", content: `تحليل الصورة: ${analysis}` });
+      userHistory[chatId].push({ role: "assistant", content: analysis });
+
+      if (userHistory[chatId].length > 10) userHistory[chatId] = userHistory[chatId].slice(-10);
+
+      bot.sendMessage(chatId, `📷 **تحليل الصورة:**\n\n${analysis}`);
+    } else {
+      bot.sendMessage(chatId, "تعذر تحليل الصورة، يرجى إعادة إرسالها بوضوح.");
+    }
+  } catch (e) {
+    clearInterval(typingInterval);
+    console.error("Vision Error:", e.message);
+    bot.sendMessage(chatId, "حدث خطأ أثناء تحليل الصورة، جرب إرسالها مرة أخرى.");
+  }
+});
+
+// 5. المحادثة النصية العامة والإجابة على الـ Quiz
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const userMessage = msg.text;
 
-  if (!userMessage || userMessage.startsWith('/') || msg.photo) return;
+  if (!userMessage || userMessage.startsWith('/') || msg.photo || msg.document) return;
 
-  let typingInterval = setInterval(() => { bot.sendChatAction(chatId, 'typing').catch(()=>{}); }, 4000);
-  bot.sendChatAction(chatId, 'typing');
+  let typingInterval = setInterval(() => { bot.sendChatAction(chatId, 'typing').catch(()=>{}); }, 3000);
 
   try {
     if (!userHistory[chatId]) userHistory[chatId] = [];
 
     const tempMessages = [
+      { role: "system", content: systemPrompt },
       ...userHistory[chatId],
       { role: "user", content: userMessage }
     ];
 
-    const models = ["openai/gpt-oss-120b", "llama-3.3-70b-versatile"];
-    let replied = false;
-    let finalResponse = "";
-    let usedModel = "";
+    let content = await callGroqAPI(tempMessages, "openai/gpt-oss-120b", 1500);
+    let usedModel = "openai/gpt-oss-120b";
 
-    for (const model of models) {
-      try {
-        // إذا لم يجب النموذج الأول خلال 10 ثوانٍ يتم الانتقال تلقائياً للثاني
-        const response = await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions", {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: model,
-            messages: [{ role: "system", content: systemPrompt }, ...tempMessages],
-            temperature: 0.5,
-            max_tokens: 1500
-          })
-        }, 10000);
-
-        if (!response.ok) continue;
-
-        const data = await response.json();
-
-        if (data.choices && data.choices[0]?.message?.content) {
-          finalResponse = data.choices[0].message.content.trim();
-          if (finalResponse.length > 0) {
-            replied = true;
-            usedModel = model;
-            break;
-          }
-        }
-      } catch (e) {
-        console.log(`Model failed/timed out: ${model}`);
-      }
+    if (!content) {
+      content = await callGroqAPI(tempMessages, "llama-3.3-70b-versatile", 1500);
+      usedModel = "llama-3.3-70b-versatile";
     }
 
-    if (replied) {
+    clearInterval(typingInterval);
+
+    if (content) {
       userHistory[chatId].push({ role: "user", content: userMessage });
-      userHistory[chatId].push({ role: "assistant", content: finalResponse });
+      userHistory[chatId].push({ role: "assistant", content: content });
+
       if (userHistory[chatId].length > 10) userHistory[chatId] = userHistory[chatId].slice(-10);
 
-      await bot.sendMessage(chatId, `${finalResponse}\n\n---\n🤖 النموذج المستخدم: \`${usedModel}\``, { parse_mode: 'Markdown' });
+      await bot.sendMessage(chatId, `${content}\n\n---\n🤖 النموذج المستخدم: \`${usedModel}\``, { parse_mode: 'Markdown' });
     } else {
-      bot.sendMessage(chatId, "عذراً، لم يتلق البوت استجابة سريعة من السيرفر. يرجى إعادة الإرسال.");
+      bot.sendMessage(chatId, "عذراً، لم يتلق البوت استجابة من السيرفر. يرجى إعادة محاولة إرسال رسالتك.");
     }
-  } catch (err) {
-    bot.sendMessage(chatId, "حدث خطأ في النظام. يرجى إعادة المحاولة.");
-  } finally {
+  } catch (e) {
     clearInterval(typingInterval);
+    bot.sendMessage(chatId, "حدث خطأ في النظام.");
   }
 });
 
-// سيرفر الـ Port الخاص بـ Render
+// سيرفر الـ Port لخدمة Render
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
