@@ -292,7 +292,7 @@ function setupBotListeners() {
       return;
     }
 
-    if (action.startsWith('mode_')) {
+        if (action.startsWith('mode_')) {
       if (ramDB.activeRequests[chatId]) return bot.sendMessage(chatId, "⏳ يرجى الانتظار...");
       ramDB.activeRequests[chatId] = true;
       let loadingMsg;
@@ -310,11 +310,18 @@ function setupBotListeners() {
         
         let studyContext = "أساسيات التمريض";
         if (subjectChunks.length > 0) {
-          studyContext = `[مقتطف من ملزمة ${subject}]:\n${subjectChunks[Math.floor(Math.random() * subjectChunks.length)]}`;
+          // نأخذ مقتطفاً دقيقاً من المادة المختارة لاستخراج الأسئلة منه
+          studyContext = `[Nursing Lecture Excerpt - Subject: ${subject}]:\n${subjectChunks[Math.floor(Math.random() * subjectChunks.length)]}`;
         }
 
         if (modeType === 'mode_quiz') {
-          const prompt = `Based on this context: ${studyContext}\nGenerate ONE NCLEX MCQ. Output strictly a JSON object: {"question": "Q?", "options": {"A": "1", "B": "2", "C": "3", "D": "4"}, "correctAnswer": "A", "explanation": "شرح بالعربي"}`;
+          // توجيه صارم: الأسئلة والخيارات بالإنجليزية، الشرح بالعربية
+          const prompt = `Based strictly on this context: ${studyContext}
+Generate ONE NCLEX-style MCQ in ENGLISH. 
+The 'explanation' field MUST be in Arabic. 
+Output strictly a valid JSON object exactly like this: 
+{"question": "English question?", "options": {"A": "Eng 1", "B": "Eng 2", "C": "Eng 3", "D": "Eng 4"}, "correctAnswer": "A", "explanation": "شرح مفصل بالعربية حول سبب اختيار هذه الإجابة"}`;
+          
           let data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "openai/gpt-oss-120b", 800, true);
           if (!data) data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "qwen/qwen3.8-27b", 800, true);
 
@@ -323,33 +330,42 @@ function setupBotListeners() {
             bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
             bot.sendMessage(chatId, `📝 **Quiz (${subject}):**\n\n${data.question}\n\nA) ${data.options.A}\nB) ${data.options.B}\nC) ${data.options.C}\nD) ${data.options.D}`, { parse_mode: 'Markdown' });
           } else {
-            bot.editMessageText("عذراً، فشل التوليد.", { chat_id: chatId, message_id: loadingMsg.message_id });
+            bot.editMessageText("عذراً، فشل التوليد. حاول مجدداً.", { chat_id: chatId, message_id: loadingMsg.message_id });
           }
         } else if (modeType === 'mode_flashcard') {
-          const prompt = `Based on this context: ${studyContext}\nExtract one nursing term. Output strictly JSON: {"term": "Term", "definition": "شرح بالعربي"}`;
+          // استخراج مفاهيم حقيقية من الملزمة بالإنجليزية مع ترجمة وشرح
+          const prompt = `Based strictly on this context: ${studyContext}
+Extract ONE key nursing or medical concept/definition. 
+Output strictly a valid JSON object exactly like this: 
+{"term": "Term in English", "definition": "Definition in English with a brief Arabic explanation"}`;
+          
           let data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "openai/gpt-oss-120b", 600, true);
           if (!data) data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "qwen/qwen3.8-27b", 600, true);
 
           if (data && data.term) {
             ramDB.activeFlashcards[chatId] = data;
             bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
-            bot.sendMessage(chatId, `🎴 **مصطلح طبي (${subject}):** **${data.term}**\n\nاضغط للقلب:`, {
+            bot.sendMessage(chatId, `🎴 **مفهوم طبي (${subject}):**\n**${data.term}**\n\nاضغط للقلب لمعرفة المعنى:`, {
               parse_mode: 'Markdown',
               reply_markup: { inline_keyboard: [[{ text: 'قلب البطاقة 🔄', callback_data: 'flip_flashcard' }]] }
             });
           } else {
-            bot.editMessageText("فشل التوليد.", { chat_id: chatId, message_id: loadingMsg.message_id });
+            bot.editMessageText("فشل توليد البطاقة. حاول مجدداً.", { chat_id: chatId, message_id: loadingMsg.message_id });
           }
         } else if (modeType === 'mode_clinical') {
-          const prompt = `Based on context: ${studyContext}\nGenerate a short clinical case study ending with priority intervention. Use Arabic hints.`;
+          // السيناريو بالإنجليزية، والتلميح بالعربية
+          const prompt = `Based strictly on this context: ${studyContext}
+Generate a short nursing clinical case study in ENGLISH ending with a priority intervention question (What is the priority nursing action?). 
+Include a brief Arabic hint at the very end. Do not use JSON, just text.`;
+          
           let text = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "openai/gpt-oss-120b", 800);
           if (!text) text = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "qwen/qwen3.8-27b", 800);
 
           if (text) {
             bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
-            bot.sendMessage(chatId, `👨‍⚕️ **حالة سريرية (${subject}):**\n\n${text}`, { parse_mode: 'Markdown' });
+            bot.sendMessage(chatId, `👨‍⚕️ **Clinical Case (${subject}):**\n\n${text}`, { parse_mode: 'Markdown' });
           } else {
-            bot.editMessageText("تعذر التوليد.", { chat_id: chatId, message_id: loadingMsg.message_id });
+            bot.editMessageText("تعذر توليد الحالة السريرية.", { chat_id: chatId, message_id: loadingMsg.message_id });
           }
         }
       } catch (e) {
@@ -359,7 +375,7 @@ function setupBotListeners() {
         delete ramDB.activeRequests[chatId];
       }
     }
-  });
+
 
   bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
