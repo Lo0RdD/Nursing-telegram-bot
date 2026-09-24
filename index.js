@@ -12,12 +12,12 @@ const db = {
   history: {},
   activeQuizzes: {},
   documents: {},
-  activeFlashcards: {} // لتخزين ظهر البطاقة (التعريف) حتى يقلبها الطالب
+  activeFlashcards: {}
 };
 
-// تم توجيه الذكاء الاصطناعي ليتناسب مع مستواك الدراسي واهتماماتك
-const systemPrompt = `أنت رفيق معرفي أكاديمي محترف في مجال التمريض. تقدم إجابات دقيقة، علمية، ومنظمة مخصصة لدعم طلبة التمريض في المرحلة الثانية، مع التركيز على مواد مثل الباثوفسيولوجي والتدريب السريري الصيفي في المستشفيات وأقسام الطوارئ.`;
+const systemPrompt = `أنت رفيق معرفي أكاديمي محترف في مجال التمريض. تقدم إجابات دقيقة، علمية، ومنظمة مخصصة لدعم طلبة التمريض في المرحلة الثانية، مع التركيز على الباثوفسيولوجي والتدريب السريري.`;
 
+// دالة تقسيم الرسائل الطويلة
 async function sendLongMessage(chatId, text, extra = {}) {
   const MAX_LENGTH = 4000;
   if (!text) return;
@@ -48,6 +48,7 @@ function chunkText(text, chunkSize = 2000, overlap = 300) {
 }
 
 function searchRelevantChunks(query, chunks, topN = 3) {
+  if (!chunks || chunks.length === 0) return [];
   const queryWords = query.toLowerCase().split(/\W+/).filter(w => w.length > 2);
   if (queryWords.length === 0) return chunks.slice(0, topN);
 
@@ -76,7 +77,7 @@ async function callGroqAPI(messages, model = "openai/gpt-oss-120b", maxTokens = 
   }
 }
 
-// دالة مساعدة لاستخراج السياق (لجعل الأسئلة مبنية على الملزمة أو المحادثة)
+// دالة تأمين سياق الدراسة لمنع انهيار الأزرار
 function getStudyContext(chatId) {
   let contextStr = "";
   if (db.documents[chatId] && db.documents[chatId].length > 0) {
@@ -91,7 +92,7 @@ function getStudyContext(chatId) {
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   if (!db.history[chatId]) db.history[chatId] = [];
-  db.documents[chatId] = [];
+  if (!db.documents[chatId]) db.documents[chatId] = [];
 
   const welcomeMessage = `أهلاً بك في منصتك التمريضية! 🩺\n\n` +
     `• 📄 أرسل ملزمة PDF لفهرستها.\n` +
@@ -102,7 +103,6 @@ bot.onText(/\/start/, (msg) => {
   sendLongMessage(chatId, welcomeMessage);
 });
 
-// الأمر الجديد: قائمة الدراسة التفاعلية
 bot.onText(/\/study/, (msg) => {
   const chatId = msg.chat.id;
   const options = {
@@ -114,44 +114,40 @@ bot.onText(/\/study/, (msg) => {
       ]
     }
   };
-  bot.sendMessage(chatId, 'اختر وضع الدراسة الذي تفضله الآن (الأسئلة ستكون مبنية على ملزمتك أو آخر نقاش لنا):', options);
+  bot.sendMessage(chatId, 'اختر وضع الدراسة الذي تفضله الآن:', options);
 });
 
-// معالج الأزرار التفاعلية
 bot.on('callback_query', async (callbackQuery) => {
   const message = callbackQuery.message;
   const chatId = message.chat.id;
   const action = callbackQuery.data;
   
-  // إخفاء علامة التحميل من الزر
   bot.answerCallbackQuery(callbackQuery.id);
-  
-  if (!db.history[chatId]) db.history[chatId] = [];
-  const studyContext = getStudyContext(chatId);
-
   bot.sendChatAction(chatId, 'typing');
 
   try {
+    if (!db.history[chatId]) db.history[chatId] = [];
+    const studyContext = getStudyContext(chatId);
+
     if (action === 'mode_quiz') {
       const quizRequest = `Based on this context: ${studyContext}\nGenerate ONE high-yield NCLEX-style nursing MCQ in ENGLISH. Format rules:\n1. English only.\n2. Hidden tag at the very end: [CORRECT: X]\n3. No explanation in the text.`;
       
-      let quizText = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: quizRequest }], "openai/gpt-oss-120b", 1000) || 
-                     await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: quizRequest }], "llama-3.3-70b-versatile", 1000);
+      let quizText = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: quizRequest }], "openai/gpt-oss-120b", 1000);
+      if (!quizText) quizText = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: quizRequest }], "llama-3.3-70b-versatile", 1000);
       
       if (quizText) {
         const match = quizText.match(/\[CORRECT:\s*([A-Da-d])\]/i);
         db.activeQuizzes[chatId] = { correctAnswer: match ? match[1].toUpperCase() : null, fullQuizText: quizText };
         sendLongMessage(chatId, `📝 **Nursing Quiz:**\n\n${quizText.replace(/\[CORRECT:\s*[A-Da-d]\]/i, '').trim()}\n\n👉 *أجب الآن بكتابة الحرف فقط (A, B, C, أو D)*`);
+      } else {
+        bot.sendMessage(chatId, "عذراً، تعذر توليد الاختبار. جرب مرة أخرى.");
       }
 
     } else if (action === 'mode_flashcard') {
-      const flashcardRequest = `Based on this context: ${studyContext}\nExtract one important nursing/medical term and its definition.
-Format your response exactly like this:
-[TERM] The medical term here
-[DEF] The definition and clinical significance here (in Arabic)`;
+      const flashcardRequest = `Based on this context: ${studyContext}\nExtract one important nursing term and its definition.\nFormat exactly like this:\n[TERM] The medical term\n[DEF] The definition (in Arabic)`;
 
-      let fcText = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: flashcardRequest }], "openai/gpt-oss-120b", 800) || 
-                   await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: flashcardRequest }], "llama-3.3-70b-versatile", 800);
+      let fcText = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: flashcardRequest }], "openai/gpt-oss-120b", 800);
+      if (!fcText) fcText = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: flashcardRequest }], "llama-3.3-70b-versatile", 800);
       
       if (fcText) {
         const termMatch = fcText.match(/\[TERM\](.*?)(?=\[DEF\])/s);
@@ -160,11 +156,12 @@ Format your response exactly like this:
         if (termMatch && defMatch) {
           const term = termMatch[1].trim();
           db.activeFlashcards[chatId] = defMatch[1].trim();
-          
           bot.sendMessage(chatId, `🎴 **مصطلح طبي:**\n\n**${term}**\n\n🤔 فكر في الإجابة ثم اضغط الزر بالأسفل لعرض الشرح!`, {
             reply_markup: { inline_keyboard: [[{ text: 'قلب البطاقة 🔄', callback_data: 'flip_flashcard' }]] }
           });
         }
+      } else {
+        bot.sendMessage(chatId, "تعذر توليد البطاقة. جرب مرة أخرى.");
       }
 
     } else if (action === 'flip_flashcard') {
@@ -177,29 +174,28 @@ Format your response exactly like this:
       }
 
     } else if (action === 'mode_clinical') {
-      const caseRequest = `Based on this context: ${studyContext}\nGenerate a short nursing clinical case study (A patient presenting to the emergency or ward). 
-End the case by asking the student: "What is the priority nursing intervention?"
-Write the case in ENGLISH, but you can explain in ARABIC. Do NOT provide the answer.`;
+      const caseRequest = `Based on this context: ${studyContext}\nGenerate a short nursing clinical case study. End by asking: "What is the priority nursing intervention?"\nWrite the case in ENGLISH, but explain clinical hints in ARABIC. Do NOT provide the final answer.`;
       
-      let caseText = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: caseRequest }], "openai/gpt-oss-120b", 1200) || 
-                     await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: caseRequest }], "llama-3.3-70b-versatile", 1200);
+      let caseText = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: caseRequest }], "openai/gpt-oss-120b", 1200);
+      if (!caseText) caseText = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: caseRequest }], "llama-3.3-70b-versatile", 1200);
       
       if (caseText) {
-        db.history[chatId].push({ role: "assistant", content: caseText }); // نحفظ الحالة في الذاكرة ليفهم إجابتك النصية اللاحقة
-        sendLongMessage(chatId, `👨‍⚕️ **حالة سريرية (Clinical Case):**\n\n${caseText}\n\n👉 *اكتب إجابتك وتدخلك التمريضي وسأقوم بمناقشته معك!*`);
+        db.history[chatId].push({ role: "assistant", content: caseText }); 
+        sendLongMessage(chatId, `👨‍⚕️ **حالة سريرية (Clinical Case):**\n\n${caseText}\n\n👉 *اكتب إجابتك وتدخلك التمريضي لنتناقش!*`);
+      } else {
+        bot.sendMessage(chatId, "تعذر توليد الحالة السريرية.");
       }
     }
   } catch (e) {
-    bot.sendMessage(chatId, "حدث خطأ أثناء معالجة وضع الدراسة.");
+    bot.sendMessage(chatId, "حدث خطأ أثناء معالجة طلبك.");
   }
 });
 
-// الأمر القديم /quiz محتفظ به للاختصار
 bot.onText(/\/quiz/, (msg) => {
-  const chatId = msg.chat.id;
-  bot.sendMessage(chatId, "انتقلنا للنظام الجديد! أرسل /study واختر 'اختبار سريع' أو أي وضع يعجبك.");
+  bot.sendMessage(msg.chat.id, "انتقلنا للنظام الجديد! أرسل /study واختر 'اختبار سريع'.");
 });
 
+// معالجة ملفات الـ PDF مع استرجاع النموذج البديل
 bot.on('document', async (msg) => {
   const chatId = msg.chat.id;
   const doc = msg.document;
@@ -212,23 +208,32 @@ bot.on('document', async (msg) => {
     const response = await axios.get(fileLink, { responseType: 'arraybuffer' });
     const pdfData = await pdfParse(response.data);
     const pdfText = pdfData.text.trim();
+    
     if (!pdfText || pdfText.length < 20) {
       clearInterval(typingInterval);
       return sendLongMessage(chatId, "عذراً، لم أستطع استخراج النصوص من هذا الملف.");
     }
 
     db.documents[chatId] = chunkText(pdfText, 2500, 300);
-    const initialContext = db.documents[chatId].slice(0, 2).join("\n\n");
-    const summaryPrompt = `إليك بداية ملزمة PDF. قدم تلخيصاً أكاديمياً شاملاً باللغة العربية.\n\n${initialContext}`;
-    const summary = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: summaryPrompt }], "openai/gpt-oss-120b", 2000);
+    const initialContext = db.documents[chatId].slice(0, 1).join("\n\n"); // تقليل الحجم لمنع انهيار السيرفر
+    const summaryPrompt = `إليك بداية ملزمة PDF. قدم تلخيصاً أكاديمياً باللغة العربية.\n\n${initialContext}`;
+    
+    let summary = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: summaryPrompt }], "openai/gpt-oss-120b", 1500);
+    let usedModel = "openai/gpt-oss-120b";
+    
+    // النموذج البديل للـ PDF (الذي كان مفقوداً وسبب الخطأ)
+    if (!summary) {
+      summary = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: summaryPrompt }], "llama-3.3-70b-versatile", 1500);
+      usedModel = "llama-3.3-70b-versatile";
+    }
 
     clearInterval(typingInterval);
     if (summary) {
       if (!db.history[chatId]) db.history[chatId] = [];
       db.history[chatId].push({ role: "assistant", content: `تمت فهرسة الملزمة بنجاح. ${summary}` });
-      sendLongMessage(chatId, `📚 **تمت فهرسة الملزمة بنجاح!** (${db.documents[chatId].length} قسم)\n\n📄 **نظرة عامة:**\n${summary}\n\n---\n💡 *أرسل /study الآن لاختبارك في هذه الملزمة تحديداً!*`);
+      sendLongMessage(chatId, `📚 **تمت فهرسة الملزمة بنجاح!** (${db.documents[chatId].length} قسم)\n\n📄 **نظرة عامة:**\n${summary}\n\n---\n💡 *أرسل /study الآن لاختبارك في الملزمة!*\n🤖 النموذج: \`${usedModel}\``);
     } else {
-      sendLongMessage(chatId, "تمت قراءة الملزمة ولكن تعذر توليد التلخيص.");
+      sendLongMessage(chatId, "تمت قراءة الملزمة وفهرستها بنجاح، ولكن تعذر توليد التلخيص بسبب الضغط على السيرفر.");
     }
   } catch (e) {
     clearInterval(typingInterval);
@@ -236,6 +241,7 @@ bot.on('document', async (msg) => {
   }
 });
 
+// المحادثة النصية العامة واستعادة اسم النموذج
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const userMessage = msg.text ? msg.text.trim() : "";
@@ -247,8 +253,11 @@ bot.on('message', async (msg) => {
     const activeQuiz = db.activeQuizzes[chatId];
     if (activeQuiz && /^[A-Da-d]$/.test(userMessage)) {
       const userChoice = userMessage.toUpperCase();
-      const evaluationPrompt = `Original question: ${activeQuiz.fullQuizText}\nCorrect answer: ${activeQuiz.correctAnswer}\nUser selected: ${userChoice}\nEvaluate the answer ONLY in ARABIC (صحيحة ✅ / خاطئة ❌) with academic nursing explanation.`;
+      const evaluationPrompt = `Original question: ${activeQuiz.fullQuizText}\nCorrect answer: ${activeQuiz.correctAnswer}\nUser selected:${userChoice}\nEvaluate the answer ONLY in ARABIC (صحيحة ✅ / خاطئة ❌) with academic explanation.`;
+      
       let evaluation = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: evaluationPrompt }], "openai/gpt-oss-120b", 1200);
+      if (!evaluation) evaluation = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: evaluationPrompt }], "llama-3.3-70b-versatile", 1200);
+      
       delete db.activeQuizzes[chatId];
       clearInterval(typingInterval);
       if (evaluation) return sendLongMessage(chatId, evaluation);
@@ -259,8 +268,10 @@ bot.on('message', async (msg) => {
     
     if (db.documents[chatId] && db.documents[chatId].length > 0) {
       const relevantChunks = searchRelevantChunks(userMessage, db.documents[chatId], 3);
-      const documentContext = relevantChunks.join("\n\n...[فاصل المادة]...\n\n");
-      currentSystemPrompt += `\n\n[مقتطفات من ملزمة الطالب للرد على سؤاله]:\n${documentContext}`;
+      if (relevantChunks.length > 0) {
+        const documentContext = relevantChunks.join("\n\n...[فاصل المادة]...\n\n");
+        currentSystemPrompt += `\n\n[مقتطفات من ملزمة الطالب للرد على سؤاله]:\n${documentContext}`;
+      }
     }
 
     const tempMessages = [
@@ -269,14 +280,23 @@ bot.on('message', async (msg) => {
       { role: "user", content: userMessage }
     ];
 
-    let content = await callGroqAPI(tempMessages, "openai/gpt-oss-120b", 2000) || await callGroqAPI(tempMessages, "llama-3.3-70b-versatile", 2000);
+    let content = await callGroqAPI(tempMessages, "openai/gpt-oss-120b", 2000);
+    let usedModel = "openai/gpt-oss-120b";
+    
+    if (!content) {
+      content = await callGroqAPI(tempMessages, "llama-3.3-70b-versatile", 2000);
+      usedModel = "llama-3.3-70b-versatile";
+    }
+    
     clearInterval(typingInterval);
 
     if (content) {
       db.history[chatId].push({ role: "user", content: userMessage });
       db.history[chatId].push({ role: "assistant", content: content });
       if (db.history[chatId].length > 10) db.history[chatId] = db.history[chatId].slice(-10);
-      sendLongMessage(chatId, `${content}`);
+      
+      // استعادة طباعة اسم النموذج كما طلبت
+      sendLongMessage(chatId, `${content}\n\n---\n🤖 النموذج: \`${usedModel}\``);
     } else {
       sendLongMessage(chatId, "عذراً، لم يتلق البوت استجابة من السيرفر. أعد إرسال رسالتك.");
     }
