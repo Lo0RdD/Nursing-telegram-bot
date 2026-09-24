@@ -125,12 +125,15 @@ async function callGroqAPI(messages, maxTokens = 800, isJson = false) {
       const payload = { model, messages, temperature: 0.3, max_tokens: maxTokens };
       if (isJson) payload.response_format = { type: "json_object" };
 
-      const response = await axios.post("https://api.groq.com/openai/v1/chat/completions", payload, {
+            const response = await axios.post("https://api.groq.com/openai/v1/chat/completions", payload, {
         headers: { Authorization: `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" }, timeout: 25000 
       });
 
       let content = response.data?.choices?.[0]?.message?.content || null;
       if (!content) continue;
+
+      console.log(`✅ SUCCESS with model: ${model}`); // <-- أضف هذا السطر هنا
+
       
       if (isJson) {
         try { 
