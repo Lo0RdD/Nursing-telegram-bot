@@ -173,7 +173,6 @@ bot.on('document', async (msg) => {
     
     ramDB.pendingDocs[chatId] = chunks;
 
-    // المجلدات الجديدة المخصصة
     const options = {
       inline_keyboard: [
         [{ text: '🤰 نسائية', callback_data: 'tag_نسائية' }],
@@ -243,7 +242,7 @@ bot.on('callback_query', async (query) => {
     if (action === 'mode_quiz') {
       const prompt = `Based strictly on this context: ${studyContext}\nGenerate ONE NCLEX-style MCQ. Output ONLY a valid JSON object:\n{"question": "Q in English", "options": {"A": "1", "B": "2", "C": "3", "D": "4"}, "correctAnswer": "A", "explanation": "شرح مفصل بالعربي"}`;
       let data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "openai/gpt-oss-120b", 1000, true);
-      if (!data) data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "llama-3.3-70b-versatile", 1000, true);
+      if (!data) data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "qwen/qwen3.6-27b", 1000, true);
 
       if (data && validateQuiz(data)) {
         ramDB.activeQuizzes[chatId] = data;
@@ -255,7 +254,7 @@ bot.on('callback_query', async (query) => {
     } else if (action === 'mode_flashcard') {
       const prompt = `Based strictly on this context: ${studyContext}\nExtract one important nursing term. Output ONLY JSON:\n{"term": "Term", "definition": "تعريف دقيق بالعربي"}`;
       let data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "openai/gpt-oss-120b", 800, true);
-      if (!data) data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "llama-3.3-70b-versatile", 800, true);
+      if (!data) data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "qwen/qwen3.6-27b", 800, true);
 
       if (data && data.term) {
         ramDB.activeFlashcards[chatId] = data;
@@ -269,7 +268,7 @@ bot.on('callback_query', async (query) => {
     } else if (action === 'mode_clinical') {
       const prompt = `Based strictly on this context: ${studyContext}\nGenerate a short clinical case study ending with: "What is the priority nursing intervention?" with Arabic hints.`;
       let text = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "openai/gpt-oss-120b", 1000);
-      if (!text) text = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "llama-3.3-70b-versatile", 1000);
+      if (!text) text = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "qwen/qwen3.6-27b", 1000);
 
       if (text) {
         bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
@@ -371,8 +370,8 @@ bot.on('message', async (msg) => {
     let content = await callGroqAPI(tempMessages, "openai/gpt-oss-120b", 1000);
     
     if (!content) {
-      usedModel = "Llama-3.3-70B";
-      content = await callGroqAPI(tempMessages, "llama-3.3-70b-versatile", 1000);
+      usedModel = "Qwen-3.6-27B";
+      content = await callGroqAPI(tempMessages, "qwen/qwen3.6-27b", 1000);
     }
 
     if (content) {
