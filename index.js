@@ -8,13 +8,27 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
 const userHistory = {};
-const systemPrompt = `أنت رفيق معرفي أكاديمي لمستخدم بمسار موسوعي يدرس التمريض. أجب بدقة وعمق علمي وبشكل مباشر لأغراض التعليم والبحث الأكاديمي.`;
+const systemPrompt = `أنت رفيق معرفي أكاديمي لمستخدم بمسار موسوعي يدرس التمريض. أجب بدقة وعمق علمي وبشكل مباشر، منظم وموجز دون إطالة مفرطة تسد السيرفر.`;
 
-// 1. أمر البداية
+// دالة جلب البيانات مع مهلة زمنية صارمة (Timeout)
+async function fetchWithTimeout(url, options, timeoutMs = 10000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(id);
+    return response;
+  } catch (err) {
+    clearTimeout(id);
+    throw err;
+  }
+}
+
+// 1. أمر البداية /start
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   userHistory[chatId] = [];
-  bot.sendMessage(chatId, "أهلاً بك! أنا جاهز الآن بكامل كفاءتي.\n\n• اسأل عن أي موضوع تمريضي مهما كان طويلاً.\n• أرسل صورة لتحليلها بوضوح.\n• أرسل /quiz في أي وقت وسأقوم باختبارك في آخر موضوع تحدثنا فيه!");
+  bot.sendMessage(chatId, "أهلاً بك! تم تحسين سرعة واستجابة البوت وإضافة حماية كاملة من التعليق.\n\n• اسأل عن أي موضوع تمريضي.\n• أرسل صورة لتحليلها.\n• أرسل /quiz للاختبار في أحدث موضوع.");
 });
 
 // 2. أمر /quiz
@@ -39,17 +53,18 @@ Provide 4 options (A, B, C, D). Ask the user to choose the correct option first 
 
     for (const model of models) {
       try {
-        const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        const response = await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions", {
           method: "POST",
           headers: { "Authorization": `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({
             model: model,
             messages: [{ role: "system", content: systemPrompt }, ...recentContext, { role: "user", content: quizPrompt }],
-            temperature: 0.5
+            temperature: 0.5,
+            max_tokens: 800
           })
-        });
+        }, 10000);
 
-        if (!response.ok) continue; // إذا فشل هذا النموذج، انتقل للتالي مباشرة
+        if (!response.ok) continue;
         const data = await response.json();
         
         if (data.choices && data.choices[0]?.message?.content) {
@@ -57,16 +72,22 @@ Provide 4 options (A, B, C, D). Ask the user to choose the correct option first 
           quizGenerated = true;
           break;
         }
-      } catch (e) { console.log(`Quiz failed on ${model}`); }
+      } catch (e) {
+        console.log(`Quiz failed or timed out on model ${model}`);
+      }
     }
 
-    if (!quizGenerated) bot.sendMessage(chatId, "حدث خطأ مؤقت أثناء توليد الاختبار. جرب مرة أخرى.");
+    if (!quizGenerated) {
+      bot.sendMessage(chatId, "حدث خطأ أثناء توليد الاختبار. حاول مرة أخرى.");
+    }
+  } catch (err) {
+    bot.sendMessage(chatId, "حدث خطأ غير متوقع. جرب مجدداً.");
   } finally {
-    clearInterval(typingInterval); // إيقاف إشعار الكتابة
+    clearInterval(typingInterval);
   }
 });
 
-// 3. معالجة الصور (تم حل المشكلة باختيار حجم متوسط للصورة)
+// 3. معالجة الصور
 bot.on('photo', async (msg) => {
   const chatId = msg.chat.id;
   const caption = msg.caption || "اقرأ واشرح ما في الصورة بدقة طبية وتمريضية.";
@@ -75,8 +96,7 @@ bot.on('photo', async (msg) => {
   bot.sendChatAction(chatId, 'typing');
 
   try {
-    // السر هنا: اختيار صورة بحجم مناسب (ليست الأكبر لتجنب رفض السيرفر بسبب الحجم)
-    const photo = msg.photo.length > 2 ? msg.photo[msg.photo.length - 2] : msg.photo[msg.photo.length - 1];
+    const photo = msg.photo.length > 1 ? msg.photo[msg.photo.length - 2] : msg.photo[0];
     const file = await bot.getFile(photo.file_id);
     const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${file.file_path}`;
 
@@ -85,13 +105,12 @@ bot.on('photo', async (msg) => {
     const base64Image = buffer.toString('base64');
     const dataUrl = `data:image/jpeg;base64,${base64Image}`;
 
-    // إضافة نماذج الرؤية بالترتيب لضمان النجاح
     const visionModels = ["llama-3.2-11b-vision-preview", "llama-3.2-90b-vision-preview"];
     let imageAnalyzed = false;
 
     for (const model of visionModels) {
       try {
-        const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        const response = await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions", {
           method: "POST",
           headers: { "Authorization": `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -104,11 +123,11 @@ bot.on('photo', async (msg) => {
               ]
             }],
             temperature: 0.3,
-            max_tokens: 1500
+            max_tokens: 1200
           })
-        });
+        }, 12000);
 
-        if (!response.ok) continue; // تخطي في حال الرفض
+        if (!response.ok) continue;
         const data = await response.json();
 
         if (data.choices && data.choices[0]?.message?.content) {
@@ -123,26 +142,26 @@ bot.on('photo', async (msg) => {
           imageAnalyzed = true;
           break;
         }
-      } catch (e) { console.log(`Vision failed on ${model}`); }
+      } catch (e) {
+        console.log(`Vision failed on ${model}`);
+      }
     }
 
-    if (!imageAnalyzed) bot.sendMessage(chatId, "عذراً، حجم الصورة كبير جداً أو تعذر تحليلها. جرب اقتصاصها (Crop) وإرسالها مجدداً.");
-
+    if (!imageAnalyzed) bot.sendMessage(chatId, "عذراً، تعذر تحليل الصورة حالياً.");
   } catch (e) {
-    bot.sendMessage(chatId, "حدث خطأ أثناء معالجة الصورة. تأكد من وضوح الصورة.");
+    bot.sendMessage(chatId, "حدث خطأ أثناء معالجة الصورة.");
   } finally {
-    clearInterval(typingInterval); // إيقاف إشعار الكتابة
+    clearInterval(typingInterval);
   }
 });
 
-// 4. المحادثة النصية العادية (تم إصلاح مشكلة الانتظار للأسئلة الطويلة)
+// 4. المحادثة النصية العادية مع خاصية المهلة الذكية
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const userMessage = msg.text;
 
   if (!userMessage || userMessage.startsWith('/') || msg.photo) return;
 
-  // إبقاء إشعار "يكتب..." شغالاً حتى يكتمل الرد الطويل
   let typingInterval = setInterval(() => { bot.sendChatAction(chatId, 'typing').catch(()=>{}); }, 4000);
   bot.sendChatAction(chatId, 'typing');
 
@@ -161,18 +180,19 @@ bot.on('message', async (msg) => {
 
     for (const model of models) {
       try {
-        const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        // إذا لم يجب النموذج الأول خلال 10 ثوانٍ يتم الانتقال تلقائياً للثاني
+        const response = await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions", {
           method: "POST",
           headers: { "Authorization": `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({
             model: model,
             messages: [{ role: "system", content: systemPrompt }, ...tempMessages],
             temperature: 0.5,
-            max_tokens: 3000 // السماح بردود علمية أطول
+            max_tokens: 1500
           })
-        });
+        }, 10000);
 
-        if (!response.ok) continue; // إذا استغرق وقتاً طويلاً أو فشل، لا تنهار، بل انتقل للنموذج التالي!
+        if (!response.ok) continue;
 
         const data = await response.json();
 
@@ -181,11 +201,11 @@ bot.on('message', async (msg) => {
           if (finalResponse.length > 0) {
             replied = true;
             usedModel = model;
-            break; 
+            break;
           }
         }
       } catch (e) {
-        console.log(`Model failed: ${model}`);
+        console.log(`Model failed/timed out: ${model}`);
       }
     }
 
@@ -196,10 +216,12 @@ bot.on('message', async (msg) => {
 
       await bot.sendMessage(chatId, `${finalResponse}\n\n---\n🤖 النموذج المستخدم: \`${usedModel}\``, { parse_mode: 'Markdown' });
     } else {
-      bot.sendMessage(chatId, "عذراً، تعذر معالجة الطلب حالياً (قد يكون هناك ضغط على السيرفر). يرجى إعادة الإرسال.");
+      bot.sendMessage(chatId, "عذراً، لم يتلق البوت استجابة سريعة من السيرفر. يرجى إعادة الإرسال.");
     }
+  } catch (err) {
+    bot.sendMessage(chatId, "حدث خطأ في النظام. يرجى إعادة المحاولة.");
   } finally {
-    clearInterval(typingInterval); // إيقاف إشعار الكتابة بمجرد انتهاء الرد أو حدوث خطأ
+    clearInterval(typingInterval);
   }
 });
 
