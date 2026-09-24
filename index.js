@@ -112,31 +112,46 @@ function searchRelevantChunks(query, allDocsObject, lastSubject) {
   return recentChunks[0] || allChunks[0];
 }
 
-async function callGroqAPI(messages, model = "openai/gpt-oss-120b", maxTokens = 800, isJson = false) {
-  try {
-    const payload = { model, messages, temperature: 0.3, max_tokens: maxTokens };
-    if (isJson) payload.response_format = { type: "json_object" };
+// دالة الاتصال بالنماذج الثلاثة بالتسلسل الذي طلبته
+async function callGroqAPI(messages, maxTokens = 800, isJson = false) {
+  const modelsSequence = [
+    "openai/gpt-oss-120b",
+    "llama-3.3-70b-versatile",
+    "qwen/qwen3.8-27b"
+  ];
 
-    // تم تعديل التايم أوت هنا إلى 25 ثانية (25000)
-    const response = await axios.post("https://api.groq.com/openai/v1/chat/completions", payload, {
-      headers: { Authorization: `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" }, timeout: 25000 
-    });
+  for (let model of modelsSequence) {
+    try {
+      const payload = { model, messages, temperature: 0.3, max_tokens: maxTokens };
+      if (isJson) payload.response_format = { type: "json_object" };
 
-    let content = response.data?.choices?.[0]?.message?.content || null;
-    if (!content) return null;
-    
-    if (isJson) {
-      try { return JSON.parse(content); } 
-      catch (e) {
-        const jsonMatch = content.match(/\{[\s\S]*\}/);
-        return jsonMatch ? JSON.parse(jsonMatch[0]) : null;
+      const response = await axios.post("https://api.groq.com/openai/v1/chat/completions", payload, {
+        headers: { Authorization: `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" }, timeout: 25000 
+      });
+
+      let content = response.data?.choices?.[0]?.message?.content || null;
+      if (!content) continue;
+      
+      if (isJson) {
+        try { 
+          const parsed = JSON.parse(content);
+          return { data: parsed, usedModel: model };
+        } 
+        catch (e) {
+          const jsonMatch = content.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            return { data: JSON.parse(jsonMatch[0]), usedModel: model };
+          }
+          continue;
+        }
       }
+      return { data: content, usedModel: model };
+
+    } catch (error) {
+      console.error(`⚠️ Model ${model} failed:`, error.message);
     }
-    return content;
-  } catch (error) {
-    console.error("Groq API Error:", error.message);
-    return null; 
   }
+  return null;
 }
 
 function validateQuiz(data) {
@@ -317,8 +332,8 @@ The 'explanation' field MUST be in Arabic.
 Output strictly a valid JSON object exactly like this: 
 {"question": "English question?", "options": {"A": "Eng 1", "B": "Eng 2", "C": "Eng 3", "D": "Eng 4"}, "correctAnswer": "A", "explanation": "شرح مفصل بالعربية حول سبب اختيار هذه الإجابة"}`;
           
-          let data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "openai/gpt-oss-120b", 800, true);
-          if (!data) data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "qwen/qwen3.8-27b", 800, true);
+          let resObj = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], 800, true);
+          let data = resObj ? resObj.data : null;
 
           if (validateQuiz(data)) {
             ramDB.activeQuizzes[chatId] = data;
@@ -333,8 +348,8 @@ Extract ONE key nursing or medical concept/definition.
 Output strictly a valid JSON object exactly like this: 
 {"term": "Term in English", "definition": "Definition in English with a brief Arabic explanation"}`;
           
-          let data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "openai/gpt-oss-120b", 600, true);
-          if (!data) data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "qwen/qwen3.8-27b", 600, true);
+          let resObj = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], 600, true);
+          let data = resObj ? resObj.data : null;
 
           if (data && data.term) {
             ramDB.activeFlashcards[chatId] = data;
@@ -351,8 +366,8 @@ Output strictly a valid JSON object exactly like this:
 Generate a short nursing clinical case study in ENGLISH ending with a priority intervention question (What is the priority nursing action?). 
 Include a brief Arabic hint at the very end. Do not use JSON, just text.`;
           
-          let text = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "openai/gpt-oss-120b", 800);
-          if (!text) text = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "qwen/qwen3.8-27b", 800);
+          let resObj = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], 800, false);
+          let text = resObj ? resObj.data : null;
 
           if (text) {
             bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
@@ -368,7 +383,7 @@ Include a brief Arabic hint at the very end. Do not use JSON, just text.`;
         delete ramDB.activeRequests[chatId];
       }
     }
-  }); // <-- هذا هو القوس الذي كان مفقوداً وتمت إضافته
+  });
 
   bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
@@ -433,14 +448,12 @@ Include a brief Arabic hint at the very end. Do not use JSON, just text.`;
         { role: "user", content: userText }
       ];
 
-      let usedModel = "GPT-OSS-120B";
-      let content = await callGroqAPI(tempMessages, "openai/gpt-oss-120b", 800);
-      if (!content) {
-        usedModel = "Qwen-3.8-27B";
-        content = await callGroqAPI(tempMessages, "qwen/qwen3.8-27b", 800);
-      }
+      let apiResult = await callGroqAPI(tempMessages, 800, false);
 
-      if (content) {
+      if (apiResult && apiResult.data) {
+        let content = apiResult.data;
+        let usedModel = apiResult.usedModel.includes('gpt') ? "GPT-120B" : apiResult.usedModel.includes('70b') ? "Llama-70B" : "Qwen-27B";
+
         history.push({ role: "user", content: userText }, { role: "assistant", content: content });
         await saveUserHistory(chatId, history); 
 
