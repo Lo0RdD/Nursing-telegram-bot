@@ -35,7 +35,7 @@ const ramDB = {
   pendingDocs: {} 
 };
 
-const systemPrompt = `أنت مساعد أكاديمي محترف لطالب تمريض. التزم بالدقة العلمية ولا تقم بتأليف معلومات غير موجودة.`;
+const systemPrompt = `أنت مساعد أكاديمي محترف لطالب تمريض. التزم بالدقة العلمية ولا تقم بتأليف معلومات غير موجودة. كن مباشراً وواضحاً في الإجابة.`;
 
 async function getUser(chatId) {
   if (!usersCollection) return { history: [], documents: {} };
@@ -47,9 +47,10 @@ async function getUser(chatId) {
   return user;
 }
 
+// تقليص التاريخ إلى آخر 8 رسائل فقط لمنع تضخم الـ Tokens
 async function saveUserHistory(chatId, history) {
   if (!usersCollection) return;
-  const trimmedHistory = history.length > 30 ? history.slice(-30) : history;
+  const trimmedHistory = history.length > 8 ? history.slice(-8) : history;
   await usersCollection.updateOne({ chatId }, { $set: { history: trimmedHistory } }, { upsert: true });
 }
 
@@ -58,7 +59,7 @@ async function saveUserDocuments(chatId, documents) {
   await usersCollection.updateOne({ chatId }, { $set: { documents } }, { upsert: true });
 }
 
-function chunkText(text, chunkSize = 1200, overlap = 200) {
+function chunkText(text, chunkSize = 1000, overlap = 150) {
   const chunks = [];
   let i = 0;
   while (i < text.length) {
@@ -68,7 +69,7 @@ function chunkText(text, chunkSize = 1200, overlap = 200) {
   return chunks;
 }
 
-function searchRelevantChunks(query, chunks, topN = 2) {
+function searchRelevantChunks(query, chunks, topN = 1) {
   if (!chunks || chunks.length === 0) return [];
   const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 1 && !['هل','ما','كيف','اشرحلي','اشرح','اللي','من'].includes(w));
   if (queryWords.length === 0) return []; 
@@ -98,23 +99,23 @@ async function getStudyContext(chatId) {
     const subjectChunks = docs[randomSubject];
     
     if (subjectChunks && subjectChunks.length > 0) {
-      const randomStart = Math.floor(Math.random() * Math.max(1, subjectChunks.length - 2));
-      return `[المصدر: ملزمة ${randomSubject}]\n${subjectChunks.slice(randomStart, randomStart + 2).join("\n\n")}`;
+      const randomStart = Math.floor(Math.random() * Math.max(1, subjectChunks.length - 1));
+      return `[المصدر: ملزمة ${randomSubject}]\n${subjectChunks[randomStart]}`;
     }
   }
 
   if (user.history && user.history.length > 0) {
-    return `[المصدر: آخر نقاشاتنا]\n${user.history.slice(-10).map(m => m.content).join("\n")}`;
+    return `[المصدر: آخر نقاشاتنا]\n${user.history.slice(-4).map(m => m.content).join("\n")}`;
   }
   return "مواضيع التمريض العامة";
 }
 
-async function callGroqAPI(messages, model = "openai/gpt-oss-120b", maxTokens = 1200, isJson = false) {
+async function callGroqAPI(messages, model = "openai/gpt-oss-120b", maxTokens = 800, isJson = false) {
   try {
     const response = await axios.post(
       "https://api.groq.com/openai/v1/chat/completions",
       { model, messages, temperature: 0.3, max_tokens: maxTokens },
-      { headers: { Authorization: `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" }, timeout: 8000 }
+      { headers: { Authorization: `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" }, timeout: 10000 }
     );
     let content = response.data?.choices?.[0]?.message?.content || null;
     if (!content) return null;
@@ -126,7 +127,10 @@ async function callGroqAPI(messages, model = "openai/gpt-oss-120b", maxTokens = 
       } catch (e) { return null; }
     }
     return content;
-  } catch (error) { return null; }
+  } catch (error) {
+    console.error("Groq API Error Details:", error.response?.data || error.message);
+    return null; 
+  }
 }
 
 function validateQuiz(data) {
@@ -169,8 +173,7 @@ bot.on('document', async (msg) => {
 
     if (!pdfText || pdfText.length < 20) return bot.editMessageText("عذراً، الملف فارغ أو مصور.", { chat_id: chatId, message_id: loadingMsg.message_id });
 
-    const chunks = chunkText(pdfText, 1200, 200);
-    
+    const chunks = chunkText(pdfText, 1000, 150);
     ramDB.pendingDocs[chatId] = chunks;
 
     const options = {
@@ -241,8 +244,8 @@ bot.on('callback_query', async (query) => {
 
     if (action === 'mode_quiz') {
       const prompt = `Based strictly on this context: ${studyContext}\nGenerate ONE NCLEX-style MCQ. Output ONLY a valid JSON object:\n{"question": "Q in English", "options": {"A": "1", "B": "2", "C": "3", "D": "4"}, "correctAnswer": "A", "explanation": "شرح مفصل بالعربي"}`;
-      let data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "openai/gpt-oss-120b", 1000, true);
-      if (!data) data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "qwen/qwen3.6-27b", 1000, true);
+      let data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "openai/gpt-oss-120b", 800, true);
+      if (!data) data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "qwen/qwen3.6-27b", 800, true);
 
       if (data && validateQuiz(data)) {
         ramDB.activeQuizzes[chatId] = data;
@@ -253,8 +256,8 @@ bot.on('callback_query', async (query) => {
       }
     } else if (action === 'mode_flashcard') {
       const prompt = `Based strictly on this context: ${studyContext}\nExtract one important nursing term. Output ONLY JSON:\n{"term": "Term", "definition": "تعريف دقيق بالعربي"}`;
-      let data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "openai/gpt-oss-120b", 800, true);
-      if (!data) data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "qwen/qwen3.6-27b", 800, true);
+      let data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "openai/gpt-oss-120b", 600, true);
+      if (!data) data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "qwen/qwen3.6-27b", 600, true);
 
       if (data && data.term) {
         ramDB.activeFlashcards[chatId] = data;
@@ -267,8 +270,8 @@ bot.on('callback_query', async (query) => {
       }
     } else if (action === 'mode_clinical') {
       const prompt = `Based strictly on this context: ${studyContext}\nGenerate a short clinical case study ending with: "What is the priority nursing intervention?" with Arabic hints.`;
-      let text = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "openai/gpt-oss-120b", 1000);
-      if (!text) text = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "qwen/qwen3.6-27b", 1000);
+      let text = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "openai/gpt-oss-120b", 800);
+      if (!text) text = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "qwen/qwen3.6-27b", 800);
 
       if (text) {
         bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
@@ -353,10 +356,9 @@ bot.on('message', async (msg) => {
     }
 
     if (allChunks.length > 0) {
-      const relevantChunks = searchRelevantChunks(userText, allChunks, 2);
+      const relevantChunks = searchRelevantChunks(userText, allChunks, 1);
       if (relevantChunks.length > 0) {
-        const documentContext = relevantChunks.join("\n\n...[فاصل المادة]...\n\n");
-        currentSystemPrompt += `\n\n[مقتطفات من ملزمة الطالب]:\n${documentContext}\n\nأجب بناءً على المقتطفات فقط.`;
+        currentSystemPrompt += `\n\n[مقتطف من الملزمة]:\n${relevantChunks[0]}\n\nأجب بناءً على هذا المقتطف.`;
       }
     }
 
@@ -367,11 +369,11 @@ bot.on('message', async (msg) => {
     ];
 
     let usedModel = "GPT-OSS-120B";
-    let content = await callGroqAPI(tempMessages, "openai/gpt-oss-120b", 1000);
+    let content = await callGroqAPI(tempMessages, "openai/gpt-oss-120b", 800);
     
     if (!content) {
       usedModel = "Qwen-3.6-27B";
-      content = await callGroqAPI(tempMessages, "qwen/qwen3.6-27b", 1000);
+      content = await callGroqAPI(tempMessages, "qwen/qwen3.6-27b", 800);
     }
 
     if (content) {
@@ -380,12 +382,7 @@ bot.on('message', async (msg) => {
       await saveUserHistory(chatId, history);
 
       const finalReply = `${content}\n\n*(تم الرد بواسطة: ${usedModel})*`;
-      
-      if (msg.voice && loadingMsgId) {
-          bot.sendMessage(chatId, finalReply);
-      } else {
-          bot.sendMessage(chatId, finalReply);
-      }
+      bot.sendMessage(chatId, finalReply);
       
     } else {
       bot.sendMessage(chatId, "عذراً، تعذر الاتصال بالذكاء الاصطناعي حالياً.");
@@ -400,5 +397,5 @@ bot.on('message', async (msg) => {
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Bot active with Tagged PDF Library');
+  res.end('Bot active with Optimized Context Window');
 }).listen(PORT, () => console.log(`🔥 Server running on port ${PORT}`));
