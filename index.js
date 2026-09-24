@@ -75,7 +75,6 @@ function chunkText(text, chunkSize = 600, overlap = 150) {
   return chunks;
 }
 
-// دالة البحث المحدثة: تعطي الأولوية القصوى للملزمة الأخيرة
 function searchRelevantChunks(query, allDocsObject, lastSubject) {
   if (!allDocsObject) return null;
   
@@ -118,8 +117,9 @@ async function callGroqAPI(messages, model = "openai/gpt-oss-120b", maxTokens = 
     const payload = { model, messages, temperature: 0.3, max_tokens: maxTokens };
     if (isJson) payload.response_format = { type: "json_object" };
 
+    // تم تعديل التايم أوت هنا إلى 25 ثانية (25000)
     const response = await axios.post("https://api.groq.com/openai/v1/chat/completions", payload, {
-      headers: { Authorization: `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" }, timeout: 250000 
+      headers: { Authorization: `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" }, timeout: 25000 
     });
 
     let content = response.data?.choices?.[0]?.message?.content || null;
@@ -156,23 +156,21 @@ function setupBotListeners() {
   bot.onText(/\/start/, (msg) => {
     bot.sendMessage(msg.chat.id, "أهلاً بك في منصة التمريض الأكاديمية! 🩺\n\n• 📄 أرسل ملزمة لتصنيفها.\n• 🎤 أرسل بصمة صوتية.\n• 🎓 أرسل /study للوضع الأكاديمي.");
   });
+
   bot.onText(/\/reset/, async (msg) => {
     const chatId = msg.chat.id;
     
-    // منع المسح إذا كان البوت يعالج طلباً حالياً
     if (ramDB.activeRequests[chatId]) {
       return bot.sendMessage(chatId, "⏳ يرجى الانتظار حتى تنتهي العملية الحالية...");
     }
 
     try {
-      // تفريغ قاعدة البيانات الخاصة بهذا المستخدم فقط
       await usersCollection.updateOne(
         { chatId: chatId },
         { $set: { history: [], documents: {}, lastSubject: null } },
         { upsert: true }
       );
 
-      // تفريغ الذاكرة المؤقتة (RAM)
       delete ramDB.pendingDocs[chatId];
       delete ramDB.activeQuizzes[chatId];
       delete ramDB.activeFlashcards[chatId];
@@ -217,7 +215,7 @@ function setupBotListeners() {
 
       if (!pdfText || pdfText.length < 20) return bot.editMessageText("الملف فارغ أو مصور.", { chat_id: chatId, message_id: loadingMsg.message_id });
 
-      ramDB.pendingDocs[chatId] = chunkText(pdfText, 1000, 150);
+      ramDB.pendingDocs[chatId] = chunkText(pdfText, 600, 150);
 
       bot.editMessageText(`👇 **إلى أي مادة تنتمي هذه الملزمة؟**`, { 
         chat_id: chatId, 
@@ -227,8 +225,7 @@ function setupBotListeners() {
             [{ text: '🤰 نسائية', callback_data: 'tag_نسائية' }],
             [{ text: '📊 طرائق البحث', callback_data: 'tag_طرائق البحث' }],
             [{ text: '🍎 تغذية', callback_data: 'tag_تغذية' }],
-            [{ text: '👥 علم الاجتماع', callback_data: 'tag_علم الاجتماع' }],
-    
+            [{ text: '👥 علم الاجتماع', callback_data: 'tag_علم الاجتماع' }]
           ]
         }
       });
@@ -292,7 +289,7 @@ function setupBotListeners() {
       return;
     }
 
-        if (action.startsWith('mode_')) {
+    if (action.startsWith('mode_')) {
       if (ramDB.activeRequests[chatId]) return bot.sendMessage(chatId, "⏳ يرجى الانتظار...");
       ramDB.activeRequests[chatId] = true;
       let loadingMsg;
@@ -310,12 +307,10 @@ function setupBotListeners() {
         
         let studyContext = "أساسيات التمريض";
         if (subjectChunks.length > 0) {
-          // نأخذ مقتطفاً دقيقاً من المادة المختارة لاستخراج الأسئلة منه
           studyContext = `[Nursing Lecture Excerpt - Subject: ${subject}]:\n${subjectChunks[Math.floor(Math.random() * subjectChunks.length)]}`;
         }
 
         if (modeType === 'mode_quiz') {
-          // توجيه صارم: الأسئلة والخيارات بالإنجليزية، الشرح بالعربية
           const prompt = `Based strictly on this context: ${studyContext}
 Generate ONE NCLEX-style MCQ in ENGLISH. 
 The 'explanation' field MUST be in Arabic. 
@@ -333,7 +328,6 @@ Output strictly a valid JSON object exactly like this:
             bot.editMessageText("عذراً، فشل التوليد. حاول مجدداً.", { chat_id: chatId, message_id: loadingMsg.message_id });
           }
         } else if (modeType === 'mode_flashcard') {
-          // استخراج مفاهيم حقيقية من الملزمة بالإنجليزية مع ترجمة وشرح
           const prompt = `Based strictly on this context: ${studyContext}
 Extract ONE key nursing or medical concept/definition. 
 Output strictly a valid JSON object exactly like this: 
@@ -353,7 +347,6 @@ Output strictly a valid JSON object exactly like this:
             bot.editMessageText("فشل توليد البطاقة. حاول مجدداً.", { chat_id: chatId, message_id: loadingMsg.message_id });
           }
         } else if (modeType === 'mode_clinical') {
-          // السيناريو بالإنجليزية، والتلميح بالعربية
           const prompt = `Based strictly on this context: ${studyContext}
 Generate a short nursing clinical case study in ENGLISH ending with a priority intervention question (What is the priority nursing action?). 
 Include a brief Arabic hint at the very end. Do not use JSON, just text.`;
@@ -375,7 +368,7 @@ Include a brief Arabic hint at the very end. Do not use JSON, just text.`;
         delete ramDB.activeRequests[chatId];
       }
     }
-
+  }); // <-- هذا هو القوس الذي كان مفقوداً وتمت إضافته
 
   bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
