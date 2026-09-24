@@ -156,6 +156,33 @@ function setupBotListeners() {
   bot.onText(/\/start/, (msg) => {
     bot.sendMessage(msg.chat.id, "أهلاً بك في منصة التمريض الأكاديمية! 🩺\n\n• 📄 أرسل ملزمة لتصنيفها.\n• 🎤 أرسل بصمة صوتية.\n• 🎓 أرسل /study للوضع الأكاديمي.");
   });
+  bot.onText(/\/reset/, async (msg) => {
+    const chatId = msg.chat.id;
+    
+    // منع المسح إذا كان البوت يعالج طلباً حالياً
+    if (ramDB.activeRequests[chatId]) {
+      return bot.sendMessage(chatId, "⏳ يرجى الانتظار حتى تنتهي العملية الحالية...");
+    }
+
+    try {
+      // تفريغ قاعدة البيانات الخاصة بهذا المستخدم فقط
+      await usersCollection.updateOne(
+        { chatId: chatId },
+        { $set: { history: [], documents: {}, lastSubject: null } },
+        { upsert: true }
+      );
+
+      // تفريغ الذاكرة المؤقتة (RAM)
+      delete ramDB.pendingDocs[chatId];
+      delete ramDB.activeQuizzes[chatId];
+      delete ramDB.activeFlashcards[chatId];
+
+      bot.sendMessage(chatId, "🗑️ **تمت التهيئة بنجاح!**\nتم مسح جميع الملازم وسجل المحادثات الخاص بك. البوت الآن نظيف تماماً وكأنك مشترك جديد.\n\nأرسل /start للبدء من جديد.", { parse_mode: 'Markdown' });
+    } catch (e) {
+      console.error("❌ Reset Error:", e);
+      bot.sendMessage(chatId, "❌ حدث خطأ أثناء محاولة مسح البيانات.");
+    }
+  });
 
   bot.onText(/\/study/, async (msg) => {
     const chatId = msg.chat.id;
