@@ -228,7 +228,7 @@ function setupBotListeners() {
             [{ text: '📊 طرائق البحث', callback_data: 'tag_طرائق البحث' }],
             [{ text: '🍎 تغذية', callback_data: 'tag_تغذية' }],
             [{ text: '👥 علم الاجتماع', callback_data: 'tag_علم الاجتماع' }],
-            [{ text: '🫀 قلب', callback_data: 'tag_قلب' }]
+    
           ]
         }
       });
