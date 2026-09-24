@@ -112,11 +112,11 @@ function searchRelevantChunks(query, allDocsObject, lastSubject) {
   return recentChunks[0] || allChunks[0];
 }
 
-// دالة الاتصال بالنماذج الثلاثة بالتسلسل الذي طلبته
+// تم جعل Llama في المقدمة ليتم اختباره ورؤيته في الـ Logs
 async function callGroqAPI(messages, maxTokens = 800, isJson = false) {
   const modelsSequence = [
-    "openai/gpt-oss-120b",
     "llama-3.3-70b-versatile",
+    "openai/gpt-oss-120b",
     "qwen/qwen3.8-27b"
   ];
 
@@ -125,15 +125,14 @@ async function callGroqAPI(messages, maxTokens = 800, isJson = false) {
       const payload = { model, messages, temperature: 0.3, max_tokens: maxTokens };
       if (isJson) payload.response_format = { type: "json_object" };
 
-            const response = await axios.post("https://api.groq.com/openai/v1/chat/completions", payload, {
+      const response = await axios.post("https://api.groq.com/openai/v1/chat/completions", payload, {
         headers: { Authorization: `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" }, timeout: 25000 
       });
 
       let content = response.data?.choices?.[0]?.message?.content || null;
       if (!content) continue;
 
-      console.log(`✅ SUCCESS with model: ${model}`); // <-- أضف هذا السطر هنا
-
+      console.log(`✅ SUCCESS with model: ${model}`);
       
       if (isJson) {
         try { 
@@ -455,7 +454,7 @@ Include a brief Arabic hint at the very end. Do not use JSON, just text.`;
 
       if (apiResult && apiResult.data) {
         let content = apiResult.data;
-        let usedModel = apiResult.usedModel.includes('gpt') ? "GPT-120B" : apiResult.usedModel.includes('70b') ? "Llama-70B" : "Qwen-27B";
+        let usedModel = apiResult.usedModel.includes('70b') ? "Llama-70B" : apiResult.usedModel.includes('gpt') ? "GPT-120B" : "Qwen-27B";
 
         history.push({ role: "user", content: userText }, { role: "assistant", content: content });
         await saveUserHistory(chatId, history); 
