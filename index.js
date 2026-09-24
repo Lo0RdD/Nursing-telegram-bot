@@ -7,7 +7,7 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
-// ذاكرة المؤقتة لآخر 6 رسائل لكل مستخدم
+// ذاكرة المؤقتة لـ 12 رسالة لكل مستخدم
 const userHistory = {};
 
 const systemPrompt = `أنت رفيق معرفي أكاديمي لمستخدم بمسار موسوعي يدرس التمريض. أجب بدقة وعمق علمي وبشكل مباشر لأغراض التعليم والبحث الأكاديمي.`;
@@ -23,7 +23,7 @@ bot.onText(/\/start/, (msg) => {
       ]
     }
   };
-  bot.sendMessage(chatId, "أهلاً بك! البوت جاهز الآن بميزات مطوّرة:\n\n• إرسال الأسئلة النصية بحفظ السياق.\n• إرسال صور المحاضرات والمخططات لتحليلها.\n• خيار الاختبارات الفلاشية السريعة.", opts);
+  bot.sendMessage(chatId, "أهلاً بك! البوت جاهز الآن بميزات مطوّرة:\n\n• إرسال الأسئلة النصية بحفظ السياق (حتى 12 رسالة).\n• إرسال صور المحاضرات والمخططات لتحليلها.\n• خيار الاختبارات الفلاشية السريعة.", opts);
 });
 
 // 2. معالجة الضغط على الأزرار التفاعلية
@@ -32,12 +32,12 @@ bot.on('callback_query', async (query) => {
   
   if (query.data === 'clear_memory') {
     userHistory[chatId] = [];
-    bot.answerCallbackQuery(query.id, { text: "تم مسح الذاكرة بنجاح!" });
+    await bot.answerCallbackQuery(query.id, { text: "تم مسح الذاكرة بنجاح!" });
     return bot.sendMessage(chatId, "🧹 تم مسح الذاكرة المؤقتة. يمكنك البدء بموضوع جديد الآن.");
   }
 
   if (query.data === 'generate_quiz') {
-    bot.answerCallbackQuery(query.id, { text: "جاري إنشاء سؤال..." });
+    await bot.answerCallbackQuery(query.id, { text: "جاري إنشاء سؤال..." });
     bot.sendChatAction(chatId, 'typing');
     
     try {
@@ -109,11 +109,12 @@ bot.on('photo', async (msg) => {
   }
 });
 
-// 4. معالجة الرسائل النصية مع الذاكرة (Memory Context)
+// 4. معالجة الرسائل النصية مع الذاكرة (Memory Context - 12 رسالة)
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const userMessage = msg.text;
 
+  // تجاهل الصور والأوامر لتجنب التكرار والتعارض
   if (!userMessage || userMessage.startsWith('/') || msg.photo) return;
 
   bot.sendChatAction(chatId, 'typing');
@@ -124,9 +125,9 @@ bot.on('message', async (msg) => {
   // إضافة رسالة المستخدم للذاكرة
   userHistory[chatId].push({ role: "user", content: userMessage });
 
-  // الحفاظ على آخر 6 رسائل فقط لتجنب تجاوز الحجم
-  if (userHistory[chatId].length > 6) {
-    userHistory[chatId] = userHistory[chatId].slice(-6);
+  // حفظ آخر 12 رسالة فقط (6 من المستخدم و 6 من البوت)
+  if (userHistory[chatId].length > 12) {
+    userHistory[chatId] = userHistory[chatId].slice(-12);
   }
 
   const selectedModels = [
@@ -179,11 +180,11 @@ bot.on('message', async (msg) => {
   }
 });
 
-// سيرفر الـ Port الخاص بـ Render
+// سيرفر الـ Port الخفيف لـ Render
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Bot is running live with Advanced Features!');
+  res.end('Bot is running live!');
 }).listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
 });
