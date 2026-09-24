@@ -119,7 +119,7 @@ async function callGroqAPI(messages, model = "openai/gpt-oss-120b", maxTokens = 
     if (isJson) payload.response_format = { type: "json_object" };
 
     const response = await axios.post("https://api.groq.com/openai/v1/chat/completions", payload, {
-      headers: { Authorization: `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" }, timeout: 10000 
+      headers: { Authorization: `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" }, timeout: 250000 
     });
 
     let content = response.data?.choices?.[0]?.message?.content || null;
