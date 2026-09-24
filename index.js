@@ -12,14 +12,14 @@ const userHistory = {};
 
 const systemPrompt = `أنت رفيق معرفي أكاديمي لمستخدم بمسار موسوعي يدرس التمريض. أجب بدقة وعمق علمي وبشكل مباشر لأغراض التعليم والبحث الأكاديمي.`;
 
-// 1. أمر البداية /start
+// 1. أمر البداية
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
-  userHistory[chatId] = []; // إعادة إعادة ضبط الذاكرة عند البداية
-  bot.sendMessage(chatId, "أهلاً بك! أنا رفيقك الأكاديمي في التمريض:\n\n• يمكنك نقاش أي موضوع نصي مع حفظ السياق.\n• أرسل صورة ملزمة أو مخطط طبي لتحليلها.\n• أرسل /quiz في أي وقت لتوليد سؤال تمريضي (NCLEX MCQ) يعتمد على *آخر موضوع* تناقشنا فيه!");
+  userHistory[chatId] = []; // تصفير الذاكرة لتجنب أي تعليق
+  bot.sendMessage(chatId, "أهلاً بك! تم استعادة النموذج الخاص بك (gpt-oss-120b).\n\n• اسأل عن أي موضوع تمريضي.\n• أرسل صورة لتحليلها.\n• أرسل /quiz في أي وقت وسأقوم باختبارك في *آخر موضوع* تحدثنا فيه فقط!");
 });
 
-// 2. أمر /quiz باللغة الإنجليزية بناءً على أحدث موضوع بالذاكرة
+// 2. أمر /quiz (تم إصلاحه ليركز على أحدث موضوع فقط)
 bot.onText(/\/quiz/, async (msg) => {
   const chatId = msg.chat.id;
   bot.sendChatAction(chatId, 'typing');
@@ -27,25 +27,22 @@ bot.onText(/\/quiz/, async (msg) => {
   const history = userHistory[chatId] || [];
 
   if (history.length === 0) {
-    return bot.sendMessage(chatId, "لم نناقش أي موضوع بعد! أرسل سؤالاً نصياً أو صورة أولاً، ثم أرسل /quiz.");
+    return bot.sendMessage(chatId, "لم نناقش أي موضوع بعد! الرجاء طرح سؤال أولاً.");
   }
 
-  // أخذ أحدث الرسائل فقط (التركيز على المواضيع الأخيرة)
-  const recentHistory = history.slice(-6);
+  // **الحل السحري لمشكلة الـ Quiz:** 
+  // جلب آخر 4 رسائل فقط (سؤالك وجواب البوت الأخير) لضمان عدم الرجوع للمواضيع القديمة
+  const recentContext = history.slice(-4);
 
-  const quizPrompt = `Based SPECIFICALLY on the MOST RECENT nursing topics or medical image analysis discussed in our recent messages above, generate ONE high-yield academic NCLEX-style nursing multiple-choice question (MCQ) in ENGLISH ONLY. 
-Focus strictly on the LATEST topic we were talking about. 
-Provide 4 options (A, B, C, D). Do NOT provide the answer immediately. Ask the user to choose the correct option.`;
+  const quizPrompt = `Based ONLY on the MOST RECENT nursing topic discussed in the latest messages above, generate ONE high-yield academic NCLEX-style nursing multiple-choice question (MCQ) in ENGLISH. 
+Focus strictly on the LATEST topic we just talked about. 
+Provide 4 options (A, B, C, D). Ask the user to choose the correct option first without giving the answer immediately.`;
 
-  const modelsForQuiz = [
-    "openai/gpt-oss-120b",
-    "llama-3.3-70b-versatile",
-    "qwen/qwen3.8-27b"
-  ];
-
+  // النموذج المفضل لديك هو الأساس
+  const models = ["openai/gpt-oss-120b", "llama-3.3-70b-versatile"];
   let quizGenerated = false;
 
-  for (const model of modelsForQuiz) {
+  for (const model of models) {
     try {
       const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
@@ -57,7 +54,7 @@ Provide 4 options (A, B, C, D). Do NOT provide the answer immediately. Ask the u
           model: model,
           messages: [
             { role: "system", content: systemPrompt },
-            ...recentHistory,
+            ...recentContext,
             { role: "user", content: quizPrompt }
           ],
           temperature: 0.5
@@ -68,24 +65,24 @@ Provide 4 options (A, B, C, D). Do NOT provide the answer immediately. Ask the u
       const quizText = data.choices[0]?.message?.content;
 
       if (quizText) {
-        bot.sendMessage(chatId, `📝 **Nursing Quiz (Based on latest topic):**\n\n${quizText}`, { parse_mode: 'Markdown' });
+        bot.sendMessage(chatId, `📝 **Nursing Quiz (Context-Based):**\n\n${quizText}`, { parse_mode: 'Markdown' });
         quizGenerated = true;
         break;
       }
     } catch (e) {
-      console.log(`Quiz error on model ${model}:`, e.message);
+      console.log(`Quiz failed on model ${model}:`, e.message);
     }
   }
 
   if (!quizGenerated) {
-    bot.sendMessage(chatId, "حدث خطأ أثناء توليد الاختبار. يرجى تجربة إعادة إرسال السؤال ثم /quiz.");
+    bot.sendMessage(chatId, "حدث خطأ مؤقت في السيرفر أثناء توليد الاختبار. جرب مرة أخرى.");
   }
 });
 
-// 3. معالجة الصور بدقة وتحويلها لـ Base64 لضمان حفظها في الذاكرة
+// 3. معالجة الصور
 bot.on('photo', async (msg) => {
   const chatId = msg.chat.id;
-  const caption = msg.caption || "اقرأ واشرح النص والمحتوى الموجود في هذه الصورة بدقة تمريضية وأكاديمية.";
+  const caption = msg.caption || "اقرأ واشرح ما في الصورة بدقة طبية وتمريضية.";
 
   bot.sendChatAction(chatId, 'typing');
 
@@ -126,25 +123,24 @@ bot.on('photo', async (msg) => {
 
       if (!userHistory[chatId]) userHistory[chatId] = [];
       
-      // إضافة تحليل الصورة لآخر الذاكرة لتصبح هي الموضوع الأحدث
-      userHistory[chatId].push({ role: "user", content: `[Latest Image Topic]: ${analysis}` });
+      // حفظ محتوى الصورة في الذاكرة لتكون هي الموضوع الأحدث للـ quiz
+      userHistory[chatId].push({ role: "user", content: `محتوى الصورة الأخير: ${analysis}` });
       userHistory[chatId].push({ role: "assistant", content: analysis });
 
-      if (userHistory[chatId].length > 12) {
-        userHistory[chatId] = userHistory[chatId].slice(-12);
+      if (userHistory[chatId].length > 10) {
+        userHistory[chatId] = userHistory[chatId].slice(-10);
       }
 
-      bot.sendMessage(chatId, `📷 **تحليل ومحتوى الصورة:**\n\n${analysis}`);
+      bot.sendMessage(chatId, `📷 **تحليل الصورة:**\n\n${analysis}`);
     } else {
-      bot.sendMessage(chatId, "تعذر تحليل الصورة، يرجى إعادة إرسالها بشكل واضح.");
+      bot.sendMessage(chatId, "تعذر تحليل الصورة.");
     }
   } catch (e) {
-    console.log("Vision Error:", e.message);
-    bot.sendMessage(chatId, "حدث خطأ أثناء معالجة الصورة، حاول مرة أخرى.");
+    bot.sendMessage(chatId, "حدث خطأ أثناء معالجة الصورة.");
   }
 });
 
-// 4. معالجة الرسائل النصية وحفظ السياق بالترتيب الصحيح
+// 4. المحادثة النصية العادية
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const userMessage = msg.text;
@@ -157,20 +153,20 @@ bot.on('message', async (msg) => {
 
   userHistory[chatId].push({ role: "user", content: userMessage });
 
-  if (userHistory[chatId].length > 12) {
-    userHistory[chatId] = userHistory[chatId].slice(-12);
+  // تقليل حجم الذاكرة لتجنب خطأ "تعذر معالجة الطلب" بسبب حجم السياق (Context Limit)
+  if (userHistory[chatId].length > 10) {
+    userHistory[chatId] = userHistory[chatId].slice(-10);
   }
 
-  // الترتيب الأساسي: gpt-oss-120b هو الخيار الأول دائماً
-  const selectedModels = [
+  // ترتيب النماذج بحيث يكون gpt-oss-120b هو الأساس
+  const models = [
     "openai/gpt-oss-120b",
-    "llama-3.3-70b-versatile",
-    "qwen/qwen3.8-27b"
+    "llama-3.3-70b-versatile"
   ];
 
   let replied = false;
 
-  for (const model of selectedModels) {
+  for (const model of models) {
     try {
       const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
@@ -195,18 +191,18 @@ bot.on('message', async (msg) => {
         const content = data.choices[0].message.content.trim();
         if (content.length > 0) {
           userHistory[chatId].push({ role: "assistant", content: content });
-          await bot.sendMessage(chatId, `${content}\n\n---\n🤖 *النموذج المستخدم:* \`${model}\``, { parse_mode: 'Markdown' });
+          await bot.sendMessage(chatId, `${content}\n\n---\n🤖 النموذج المستخدم: \`${model}\``, { parse_mode: 'Markdown' });
           replied = true;
           break;
         }
       }
     } catch (e) {
-      console.log(`فشل النموذج ${model}، تجربة التالي...`);
+      console.log(`Model failed: ${model}`);
     }
   }
 
   if (!replied) {
-    bot.sendMessage(chatId, "عذراً، تعذر معالجة الطلب حالياً. يرجى إعادة الإرسال.");
+    bot.sendMessage(chatId, "عذراً، تعذر معالجة الطلب حالياً (قد يكون هناك ضغط على السيرفر). يرجى إعادة الإرسال.");
   }
 });
 
