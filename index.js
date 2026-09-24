@@ -137,66 +137,6 @@ bot.on('document', async (msg) => {
 });
 
 // 4. معالجة الصور المرفقة
-bot.on('photo', async (msg) => {
-  const chatId = msg.chat.id;
-  const caption = msg.caption || "اقرأ واشرح ما في هذه الصورة بأسلوب تمريضي أكاديمي ودقيق.";
-
-  let typingInterval = setInterval(() => { bot.sendChatAction(chatId, 'typing').catch(()=>{}); }, 3000);
-
-  try {
-    const photo = msg.photo[msg.photo.length - 1];
-    const fileLink = await bot.getFileLink(photo.file_id);
-
-    const imgResponse = await axios.get(fileLink, { responseType: 'arraybuffer' });
-    const base64Image = Buffer.from(imgResponse.data).toString('base64');
-    const dataUrl = `data:image/jpeg;base64,${base64Image}`;
-
-    const response = await axios.post(
-      "https://api.groq.com/openai/v1/chat/completions",
-      {
-        model: "llama-3.2-11b-vision-preview",
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: caption },
-              { type: "image_url", image_url: { url: dataUrl } }
-            ]
-          }
-        ],
-        temperature: 0.3,
-        max_tokens: 1200
-      },
-      {
-        headers: {
-          "Authorization": `Bearer ${GROQ_API_KEY}`,
-          "Content-Type": "application/json"
-        },
-        timeout: 20000
-      }
-    );
-
-    clearInterval(typingInterval);
-
-    const analysis = response.data.choices[0]?.message?.content;
-    if (analysis) {
-      if (!userHistory[chatId]) userHistory[chatId] = [];
-      userHistory[chatId].push({ role: "user", content: `تحليل الصورة: ${analysis}` });
-      userHistory[chatId].push({ role: "assistant", content: analysis });
-
-      if (userHistory[chatId].length > 10) userHistory[chatId] = userHistory[chatId].slice(-10);
-
-      bot.sendMessage(chatId, `📷 **تحليل الصورة:**\n\n${analysis}`);
-    } else {
-      bot.sendMessage(chatId, "تعذر تحليل الصورة، يرجى إعادة إرسالها بوضوح.");
-    }
-  } catch (e) {
-    clearInterval(typingInterval);
-    console.error("Vision Error:", e.message);
-    bot.sendMessage(chatId, "حدث خطأ أثناء تحليل الصورة، جرب إرسالها مرة أخرى.");
-  }
-});
-
 // 5. المحادثة النصية العامة والإجابة على الـ Quiz
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
