@@ -7,74 +7,77 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
-// ذاكرة المؤقتة لـ 12 رسالة لكل مستخدم
+// ذاكرة المحادثة (12 رسالة)
 const userHistory = {};
 
 const systemPrompt = `أنت رفيق معرفي أكاديمي لمستخدم بمسار موسوعي يدرس التمريض. أجب بدقة وعمق علمي وبشكل مباشر لأغراض التعليم والبحث الأكاديمي.`;
 
-// 1. أمر البداية مع أزرار تفاعلية
+// 1. أمر البداية
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
-  const opts = {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: "🩺 اختبرني بسؤال تمريضي (Quiz)", callback_data: "generate_quiz" }],
-        [{ text: "🗑️ مسح ذاكرة المحادثة", callback_data: "clear_memory" }]
-      ]
-    }
-  };
-  bot.sendMessage(chatId, "أهلاً بك! البوت جاهز الآن بميزات مطوّرة:\n\n• إرسال الأسئلة النصية بحفظ السياق (حتى 12 رسالة).\n• إرسال صور المحاضرات والمخططات لتحليلها.\n• خيار الاختبارات الفلاشية السريعة.", opts);
+  bot.sendMessage(chatId, "أهلاً بك! البوت جاهز للاستخدام الأكاديمي المتقدم:\n\n• ارسل أي سؤال نصي لمناقشته مع حفظ السياق.\n• ارسل صورة ملزمة أو مخطط طبي لتحليل نصوصها.\n• اكتب الأمر /quiz في أي وقت ليقوم بتوليد سؤال تمريضي إنجليزي (MCQ) مستوحى من الموضوع الحالي الذي تتناقشان فيه!");
 });
 
-// 2. معالجة الضغط على الأزرار التفاعلية
-bot.on('callback_query', async (query) => {
-  const chatId = query.message.chat.id;
+// 2. أمر /quiz ذكي وبمرجعية إنجليزية
+bot.onText(/\/quiz/, async (msg) => {
+  const chatId = msg.chat.id;
+  bot.sendChatAction(chatId, 'typing');
+
+  const history = userHistory[chatId] || [];
   
-  if (query.data === 'clear_memory') {
-    userHistory[chatId] = [];
-    await bot.answerCallbackQuery(query.id, { text: "تم مسح الذاكرة بنجاح!" });
-    return bot.sendMessage(chatId, "🧹 تم مسح الذاكرة المؤقتة. يمكنك البدء بموضوع جديد الآن.");
-  }
+  const quizPrompt = `Based on the recent context or topics discussed in our chat history, generate ONE high-yield academic NCLEX-style nursing multiple-choice question (MCQ) in ENGLISH ONLY. 
+Provide 4 options (A, B, C, D). Do NOT provide the correct answer immediately. Ask the user to choose the correct option first.`;
 
-  if (query.data === 'generate_quiz') {
-    await bot.answerCallbackQuery(query.id, { text: "جاري إنشاء سؤال..." });
-    bot.sendChatAction(chatId, 'typing');
-    
-    try {
-      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${GROQ_API_KEY}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          model: "openai/gpt-oss-120b",
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: "اطرح عليّ سؤالاً تمريضياً متعدد الخيارات (MCQ) مع 4 خيارات، دون إعطاء الإجابة الصحيحة فوراً، واطلب مني اختيار الإجابة." }
-          ],
-          temperature: 0.7
-        })
-      });
-      const data = await response.json();
-      const quizText = data.choices[0]?.message?.content;
-      bot.sendMessage(chatId, `📝 **سؤال اختباري:**\n\n${quizText}`, { parse_mode: 'Markdown' });
-    } catch (e) {
-      bot.sendMessage(chatId, "تعذر إنشاء السؤال حالياً، حاول مرة أخرى.");
+  try {
+    const messagesPayload = [
+      { role: "system", content: systemPrompt },
+      ...history,
+      { role: "user", content: quizPrompt }
+    ];
+
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${GROQ_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "openai/gpt-oss-120b",
+        messages: messagesPayload,
+        temperature: 0.6
+      })
+    });
+
+    const data = await response.json();
+    const quizText = data.choices[0]?.message?.content;
+
+    if (quizText) {
+      bot.sendMessage(chatId, `📝 **Nursing Quiz (Context-Based):**\n\n${quizText}`, { parse_mode: 'Markdown' });
+    } else {
+      bot.sendMessage(chatId, "Please discuss a topic or send a photo first, then type /quiz.");
     }
+  } catch (e) {
+    bot.sendMessage(chatId, "Error generating quiz. Please try again.");
   }
 });
 
-// 3. معالجة الصور (Vision - OCR وتحليل)
+// 3. معالجة الصور عبر التحويل إلى Base64 (حل مشكلة الصور المباشر)
 bot.on('photo', async (msg) => {
   const chatId = msg.chat.id;
-  const caption = msg.caption || "اشرح واقرأ ما يوجد في هذه الصورة بدقة علمية وتمريضية.";
+  const caption = msg.caption || "اقرأ واشرح ما يوجد في هذه الصورة بدقة علمية وتمريضية باللغة العربية.";
 
   bot.sendChatAction(chatId, 'typing');
 
   try {
-    const photo = msg.photo[msg.photo.length - 1]; // الحصول على أعلى دقة
-    const fileLink = await bot.getFileLink(photo.file_id);
+    const photo = msg.photo[msg.photo.length - 1];
+    const file = await bot.getFile(photo.file_id);
+    const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${file.file_path}`;
+
+    // جلب الصورة وتحويلها لـ Base64
+    const imgResponse = await fetch(fileUrl);
+    const buffer = await imgResponse.buffer();
+    const base64Image = buffer.toString('base64');
+    const dataUrl = `data:image/jpeg;base64,${base64Image}`;
 
     const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
@@ -89,43 +92,44 @@ bot.on('photo', async (msg) => {
             role: "user",
             content: [
               { type: "text", text: caption },
-              { type: "image_url", image_url: { url: fileLink } }
+              { type: "image_url", image_url: { url: dataUrl } }
             ]
           }
         ],
-        temperature: 0.4
+        temperature: 0.3
       })
     });
 
     const data = await response.json();
     if (data.choices && data.choices[0]?.message?.content) {
-      bot.sendMessage(chatId, `📷 **تحليل الصورة:**\n\n${data.choices[0].message.content}`);
+      const analysis = data.choices[0].message.content;
+      
+      // حفظ التحليل في الذاكرة حتى يمكن إنشاء quiz منه لاحقاً
+      if (!userHistory[chatId]) userHistory[chatId] = [];
+      userHistory[chatId].push({ role: "user", content: `[Image Content Analysis]: ${analysis}` });
+
+      bot.sendMessage(chatId, `📷 **تحليل واستخراج النص:**\n\n${analysis}`);
     } else {
-      bot.sendMessage(chatId, "تعذر تحليل الصورة، تأكد من وضوح النص فيها.");
+      bot.sendMessage(chatId, "تعذر تحليل الصورة، يرجى التأكد من اختيار صورة واضحة.");
     }
   } catch (e) {
-    console.log("خطأ في تحليل الصورة:", e.message);
-    bot.sendMessage(chatId, "حدث خطأ أثناء معالجة الصورة عبر نموذج الرؤية.");
+    console.log("Vision Error:", e.message);
+    bot.sendMessage(chatId, "حدث خطأ أثناء معالجة الصورة، تأكد من إعدادات المفاتيح.");
   }
 });
 
-// 4. معالجة الرسائل النصية مع الذاكرة (Memory Context - 12 رسالة)
+// 4. معالجة الرسائل النصية والذاكرة
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const userMessage = msg.text;
 
-  // تجاهل الصور والأوامر لتجنب التكرار والتعارض
   if (!userMessage || userMessage.startsWith('/') || msg.photo) return;
 
   bot.sendChatAction(chatId, 'typing');
 
-  // تهيئة الذاكرة للمستخدم
   if (!userHistory[chatId]) userHistory[chatId] = [];
-
-  // إضافة رسالة المستخدم للذاكرة
   userHistory[chatId].push({ role: "user", content: userMessage });
 
-  // حفظ آخر 12 رسالة فقط (6 من المستخدم و 6 من البوت)
   if (userHistory[chatId].length > 12) {
     userHistory[chatId] = userHistory[chatId].slice(-12);
   }
@@ -162,29 +166,25 @@ bot.on('message', async (msg) => {
       if (data.choices && data.choices[0]?.message?.content) {
         const content = data.choices[0].message.content.trim();
         if (content.length > 0) {
-          // إضافة رد البوت للذاكرة
           userHistory[chatId].push({ role: "assistant", content: content });
-          
           await bot.sendMessage(chatId, `${content}\n\n---\n🤖 *النموذج المستخدم:* \`${model}\``, { parse_mode: 'Markdown' });
           replied = true;
           break;
         }
       }
     } catch (e) {
-      console.log(`فشل النموذج ${model}، جاري الانتقال للبديل...`);
+      console.log(`Model failed: ${model}`);
     }
   }
 
   if (!replied) {
-    bot.sendMessage(chatId, "عذراً، تعذر معالجة الطلب حالياً. يرجى إعادة إرساله بعبارة قصيرة.");
+    bot.sendMessage(chatId, "عذراً، تعذر معالجة الطلب حالياً.");
   }
 });
 
-// سيرفر الـ Port الخفيف لـ Render
+// سيرفر الـ Port
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Bot is running live!');
-}).listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
-});
+  res.end('Bot active');
+}).listen(PORT);
