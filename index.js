@@ -46,15 +46,15 @@ function searchRelevantChunks(query, chunks, topN = 2) {
   return scoredChunks.slice(0, topN).map(c => c.chunk);
 }
 
-// دالة جلب السياق (سواء من الملزمة أو آخر نقاش لضمان ارتباط الأزرار بالمنهج)
 function getStudyContext(chatId) {
   if (db.documents[chatId] && db.documents[chatId].length > 0) {
     const docs = db.documents[chatId];
     const randomStart = Math.floor(Math.random() * Math.max(1, docs.length - 2));
     return `[المصدر: ملزمة الطالب Mapped PDF]\n${docs.slice(randomStart, randomStart + 2).join("\n\n")}`;
   }
+  // رفعنا ذاكرة سياق الأزرار إلى آخر 10 رسائل بدل 4
   if (db.history[chatId] && db.history[chatId].length > 0) {
-    return `[المصدر: آخر نقاشاتنا]\n${db.history[chatId].slice(-4).map(m => m.content).join("\n")}`;
+    return `[المصدر: آخر نقاشاتنا]\n${db.history[chatId].slice(-10).map(m => m.content).join("\n")}`;
   }
   return "أساسيات التمريض العامة (Nursing Fundamentals)";
 }
@@ -106,10 +106,9 @@ bot.onText(/\/study/, (msg) => {
       [{ text: '📝 اختبار سريع (Quiz)', callback_data: 'mode_quiz' }]
     ]
   };
-  bot.sendMessage(chatId, '📚 **اختر وضع الدراسة الذي تفضله الآن (سيتم توليده بناءً على ملزمتك أو نقاشاتنا):**', { reply_markup: options });
+  bot.sendMessage(chatId, '📚 **اختر وضع الدراسة الذي تفضله الآن:**', { reply_markup: options });
 });
 
-// استقبال ملفات الـ PDF وفهرستها
 bot.on('document', async (msg) => {
   const chatId = msg.chat.id;
   const doc = msg.document;
@@ -136,7 +135,6 @@ bot.on('document', async (msg) => {
   }
 });
 
-// معالجة الأزرار (مرتبطة تماماً بـ studyContext لتعتمد على الملزمة)
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const action = query.data;
@@ -167,7 +165,7 @@ bot.on('callback_query', async (query) => {
       if (data && validateQuiz(data)) {
         db.activeQuizzes[chatId] = data;
         bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
-        bot.sendMessage(chatId, `📝 **Nursing Quiz (من الملزمة):**\n\n${data.question}\n\nA) ${data.options.A}\nB) ${data.options.B}\nC) ${data.options.C}\nD) ${data.options.D}\n\n👉 *أجب بحرف الخيار فقط (A, B, C, D)*`);
+        bot.sendMessage(chatId, `📝 **Nursing Quiz:**\n\n${data.question}\n\nA) ${data.options.A}\nB) ${data.options.B}\nC) ${data.options.C}\nD) ${data.options.D}\n\n👉 *أجب بحرف الخيار فقط (A, B, C, D)*`);
       } else {
         bot.editMessageText("عذراً، فشل توليد الاختبار.", { chat_id: chatId, message_id: loadingMsg.message_id });
       }
@@ -179,7 +177,7 @@ bot.on('callback_query', async (query) => {
       if (data && data.term) {
         db.activeFlashcards[chatId] = data;
         bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
-        bot.sendMessage(chatId, `🎴 **مصطلح طبي (من الملزمة):** **${data.term}**\n\nاضغط لقلب البطاقة:`, {
+        bot.sendMessage(chatId, `🎴 **مصطلح طبي:** **${data.term}**\n\nاضغط لقلب البطاقة:`, {
           reply_markup: { inline_keyboard: [[{ text: 'قلب البطاقة 🔄', callback_data: 'flip_flashcard' }]] }
         });
       } else {
@@ -192,7 +190,7 @@ bot.on('callback_query', async (query) => {
 
       if (text) {
         bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
-        bot.sendMessage(chatId, `👨‍⚕️ **حالة سريرية (من الملزمة):**\n\n${text}`);
+        bot.sendMessage(chatId, `👨‍⚕️ **حالة سريرية:**\n\n${text}`);
       } else {
         bot.editMessageText("تعذر توليد الحالة السريرية.", { chat_id: chatId, message_id: loadingMsg.message_id });
       }
@@ -202,13 +200,11 @@ bot.on('callback_query', async (query) => {
   }
 });
 
-// معالجة الرسائل النصية مع مؤشر الكتابة (Typing) واستدعاء Groq الحقيقي
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text ? msg.text.trim() : "";
   if (!text || text.startsWith('/') || msg.document) return;
 
-  // 1. تقييم الكويز محلياً إذا كان هناك كويز نشط
   const quiz = db.activeQuizzes[chatId];
   if (quiz && /^[A-Da-d]$/.test(text)) {
     const isCorrect = text.toUpperCase() === quiz.correctAnswer;
@@ -218,19 +214,17 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  // 2. تفعيل مؤشر الكتابة (Typing Action) في الأعلى
   bot.sendChatAction(chatId, 'typing').catch(() => {});
 
   try {
     if (!db.history[chatId]) db.history[chatId] = [];
     let currentSystemPrompt = systemPrompt;
 
-    // استرجاع أجزاء من الملزمة إذا كانت مرفوعة (RAG)
     if (db.documents[chatId] && db.documents[chatId].length > 0) {
       const relevantChunks = searchRelevantChunks(text, db.documents[chatId], 2);
       if (relevantChunks.length > 0) {
         const documentContext = relevantChunks.join("\n\n...[فاصل المادة]...\n\n");
-        currentSystemPrompt += `\n\n[مقتطفات من ملزمة الطالب]:\n${documentContext}\n\nأجب بناءً على المقتطفات فقط. إذا كانت المقتطفات لا تكفي، صرّح بذلك بوضوح ولا تؤلف إجابة خارجية.`;
+        currentSystemPrompt += `\n\n[مقتطفات من ملزمة الطالب]:\n${documentContext}\n\nأجب بناءً على المقتطفات فقط.`;
       }
     }
 
@@ -240,15 +234,27 @@ bot.on('message', async (msg) => {
       { role: "user", content: text }
     ];
 
+    // تتبع اسم النموذج المستخدم
+    let usedModel = "GPT-OSS-120B";
     let content = await callGroqAPI(tempMessages, "openai/gpt-oss-120b", 1000);
-    if (!content) content = await callGroqAPI(tempMessages, "llama-3.3-70b-versatile", 1000);
+    
+    if (!content) {
+      usedModel = "Llama-3.3-70B";
+      content = await callGroqAPI(tempMessages, "llama-3.3-70b-versatile", 1000);
+    }
 
     if (content) {
       db.history[chatId].push({ role: "user", content: text });
       db.history[chatId].push({ role: "assistant", content: content });
-      if (db.history[chatId].length > 6) db.history[chatId] = db.history[chatId].slice(-6);
+      
+      // رفعنا حد الذاكرة من 6 إلى 30 رسالة (15 سؤال و 15 جواب)
+      if (db.history[chatId].length > 30) {
+        db.history[chatId] = db.history[chatId].slice(-30);
+      }
 
-      bot.sendMessage(chatId, content);
+      // إضافة توقيع النموذج في نهاية الرد
+      const finalReply = `${content}\n\n*(تم الرد بواسطة: ${usedModel})*`;
+      bot.sendMessage(chatId, finalReply);
     } else {
       bot.sendMessage(chatId, "عذراً، تعذر الاتصال بالذكاء الاصطناعي حالياً.");
     }
