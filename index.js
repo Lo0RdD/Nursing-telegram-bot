@@ -1,38 +1,48 @@
 const TelegramBot = require('node-telegram-bot-api');
-const axios = require('axios');
 const http = require('http');
-const pdfParse = require('pdf-parse');
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
-// تشغيل البوت
+// طباعة إضافية للتأكد من قراءة التوكن والبدء
+console.log("🔥 APP INITIALIZING...");
+
+if (!TELEGRAM_TOKEN) {
+  console.error("❌ ERROR: TELEGRAM_TOKEN is missing in environment variables!");
+}
+
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
-const db = {
-  history: {},
-  documents: {}
-};
+console.log("🔥 BOT STARTED - TEST VERSION");
 
-// 1. أوامر تيليجرام
+// اختبار أمر /start
 bot.onText(/\/start/, (msg) => {
+  console.log("🔥 START COMMAND RECEIVED from chat ID:", msg.chat.id);
   const chatId = msg.chat.id;
-  bot.sendMessage(chatId, "أهلاً بك! البوت جاهز لاختبار الأزرار. أرسل /study");
+  bot.sendMessage(
+    chatId,
+    "أهلاً بك! البوت يعمل بنجاح. أرسل /study"
+  );
 });
 
+// اختبار أمر /study والأزرار
 bot.onText(/\/study/, (msg) => {
+  console.log("🔥 STUDY COMMAND RECEIVED from chat ID:", msg.chat.id);
   const chatId = msg.chat.id;
   const options = {
     inline_keyboard: [
-      [{ text: '👨‍⚕️ حالة سريرية (Clinical Case)', callback_data: 'mode_clinical' }],
-      [{ text: '🎴 بطاقة استذكار (Flashcard)', callback_data: 'mode_flashcard' }],
-      [{ text: '📝 اختبار سريع (Quiz)', callback_data: 'mode_quiz' }]
+      [{ text: 'Clinical Case', callback_data: 'mode_clinical' }],
+      [{ text: 'Flashcard', callback_data: 'mode_flashcard' }],
+      [{ text: 'Quiz', callback_data: 'mode_quiz' }]
     ]
   };
-  bot.sendMessage(chatId, '📚 **اختر وضع الدراسة الذي تفضله الآن لاختبار الأزرار:**', { parse_mode: 'Markdown', reply_markup: options });
+  bot.sendMessage(
+    chatId,
+    'اختر وضع الدراسة:',
+    { reply_markup: options }
+  );
 });
 
-// 2. اختبار الـ Callback Query المباشر
+// اختبار استقبال الأزرار
 bot.on('callback_query', async (callbackQuery) => {
   console.log("🔥 CALLBACK RECEIVED:", callbackQuery.data);
   const chatId = callbackQuery.message?.chat?.id;
@@ -51,16 +61,11 @@ bot.on('callback_query', async (callbackQuery) => {
   }
 });
 
-// 3. المحادثة النصية البسيطة
-bot.on('message', async (msg) => {
-  const chatId = msg.chat.id;
-  const userMessage = msg.text ? msg.text.trim() : "";
-  if (!userMessage || userMessage.startsWith('/')) return;
-  bot.sendMessage(chatId, `وصلت رسالتك: ${userMessage}`);
-});
-
+// سيرفر HTTP البسيط لكي يستيقظ Render ولا يدخل في Sleep دائم
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Bot active');
-}).listen(PORT);
+  res.end('Bot active and running');
+}).listen(PORT, () => {
+  console.log(`🔥 HTTP Server running on port ${PORT}`);
+});
