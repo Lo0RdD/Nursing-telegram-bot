@@ -68,7 +68,7 @@ Provide 4 options (A, B, C, D). Do NOT provide the correct answer or explanation
 
     let quizText = await callGroqAPI(messages, "openai/gpt-oss-120b", 800);
     if (!quizText) {
-      quizText = await callGroqAPI(messages, "llama-3.3-70b-versatile", 800);
+      quizText = await callGroqAPI(messages, "qwen/qwen3.6-27b", 800);
     }
 
     clearInterval(typingInterval);
@@ -219,7 +219,7 @@ bot.on('message', async (msg) => {
     let usedModel = "openai/gpt-oss-120b";
 
     if (!content) {
-      content = await callGroqAPI(tempMessages, "llama-3.3-70b-versatile", 1500);
+      content = await callGroqAPI(tempMessages, "qwen/qwen3.6-27b", 1500);
       usedModel = "llama-3.3-70b-versatile";
     }
 
