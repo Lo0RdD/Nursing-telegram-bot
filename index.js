@@ -9,6 +9,10 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const MONGO_URI = process.env.MONGO_URI;
 
+// ضع رابط موقعك على Render هنا (مثال: https://nursing-bot.onrender.com)
+// أو دعه يتعرف عليه تلقائياً إذا أضفت متغير بيئة، لكن يفضل وضع الرابط الثابت مباشرة
+const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || "https://nursing-telegram-bot.onrender.com"; // استبدل الرابط برابط موقعك الحقيقي على Render
+
 console.log("🔥 APP INITIALIZING...");
 
 const client = new MongoClient(MONGO_URI);
@@ -47,7 +51,6 @@ async function getUser(chatId) {
   return user;
 }
 
-// تقليص التاريخ إلى آخر 8 رسائل فقط لمنع تضخم الـ Tokens
 async function saveUserHistory(chatId, history) {
   if (!usersCollection) return;
   const trimmedHistory = history.length > 8 ? history.slice(-8) : history;
@@ -397,5 +400,16 @@ bot.on('message', async (msg) => {
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Bot active with Optimized Context Window');
-}).listen(PORT, () => console.log(`🔥 Server running on port ${PORT}`));
+  res.end('Bot active & awake');
+}).listen(PORT, () => {
+  console.log(`🔥 Server running on port ${PORT}`);
+
+  // آلية منع النوم (Self-Ping): يقوم السيرفر بطلب نفسه كل 9 دقائق ليبقي السيرفر مستيقظاً دائماً
+  if (RENDER_EXTERNAL_URL) {
+    setInterval(() => {
+      axios.get(RENDER_EXTERNAL_URL)
+        .then(() => console.log("🔄 Keep-Alive Ping sent successfully!"))
+        .catch(err => console.log("⚠️ Keep-Alive Ping failed:", err.message));
+    }, 9 * 60 * 1000); // كل 9 دقائق
+  }
+});
