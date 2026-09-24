@@ -41,7 +41,7 @@ async function callGroqAPI(messages, model = "openai/gpt-oss-120b", maxTokens = 
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   userHistory[chatId] = [];
-  bot.sendMessage(chatId, "أهلاً بك! تم حل جميع المشاكل بنجاح:\n\n• يمكنك الإجابة على الكويزات بكتابة الخيار (A, B, C, D) وسأقيمه لك فوراً.\n• أرسل أي ملف ملزمة بصيغة PDF وسأقرأه وألخصه لك.\n• أرسل الصور المخططة والمستندات لتحليلها.\n• أرسل /quiz في أي وقت لاختبارك في أحدث موضوع تناقشنا فيه!");
+  bot.sendMessage(chatId, "أهلاً بك! البوت جاهز الآن لمساعدتك:\n\n• اسأل عن أي موضوع تمريضي أو أكاديمي.\n• أرسل أي ملف ملزمة بصيغة PDF وسأقرأه وألخصه لك.\n• أرسل /quiz في أي وقت لاختبارك في أحدث موضوع تناقشنا فيه (ثم أجب بحرف A أو B أو C أو D).");
 });
 
 // 2. أمر /quiz (مع حفظ السؤال بالذاكرة)
@@ -68,7 +68,7 @@ Provide 4 options (A, B, C, D). Do NOT provide the correct answer or explanation
 
     let quizText = await callGroqAPI(messages, "openai/gpt-oss-120b", 800);
     if (!quizText) {
-      quizText = await callGroqAPI(messages, "qwen/qwen3.6-27b", 800);
+      quizText = await callGroqAPI(messages, "llama-3.3-70b-versatile", 800);
     }
 
     clearInterval(typingInterval);
@@ -84,7 +84,7 @@ Provide 4 options (A, B, C, D). Do NOT provide the correct answer or explanation
     }
   } catch (e) {
     clearInterval(typingInterval);
-    bot.sendMessage(chatId, "حدث خطأ غير متوقع.");
+    bot.sendMessage(chatId, "حدث خطأ غير متوقع أثناء توليد الكويز.");
   }
 });
 
@@ -111,7 +111,6 @@ bot.on('document', async (msg) => {
     }
 
     const trimmedText = pdfText.substring(0, 4000);
-
     const summaryPrompt = `لقد أرسل المستخدم ملف PDF أكاديمي في التمريض. إليك محتوى الملزمة:\n\n${trimmedText}\n\nيرجى تقديم تلخيص أكاديمي شامل لأهم المفاهيم، النقاط التمريضية، والتدخلات المذكورة في هذا الملف.`;
 
     const summary = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: summaryPrompt }]);
@@ -136,13 +135,13 @@ bot.on('document', async (msg) => {
   }
 });
 
-// 4. معالجة الصور المرفقة
-// 5. المحادثة النصية العامة والإجابة على الـ Quiz
+// 4. المحادثة النصية العامة والإجابة على الـ Quiz
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const userMessage = msg.text;
 
-  if (!userMessage || userMessage.startsWith('/') || msg.photo || msg.document) return;
+  // تجاهل الأوامر وملفات الـ PDF لئلا تتداخل مع المعالج الخاص بها
+  if (!userMessage || userMessage.startsWith('/') || msg.document) return;
 
   let typingInterval = setInterval(() => { bot.sendChatAction(chatId, 'typing').catch(()=>{}); }, 3000);
 
@@ -159,7 +158,7 @@ bot.on('message', async (msg) => {
     let usedModel = "openai/gpt-oss-120b";
 
     if (!content) {
-      content = await callGroqAPI(tempMessages, "qwen/qwen3.6-27b", 1500);
+      content = await callGroqAPI(tempMessages, "llama-3.3-70b-versatile", 1500);
       usedModel = "llama-3.3-70b-versatile";
     }
 
@@ -177,6 +176,7 @@ bot.on('message', async (msg) => {
     }
   } catch (e) {
     clearInterval(typingInterval);
+    console.error("Message Error:", e.message);
     bot.sendMessage(chatId, "حدث خطأ في النظام.");
   }
 });
