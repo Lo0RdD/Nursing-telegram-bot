@@ -65,7 +65,7 @@ async function saveUserDocuments(chatId, documents, lastSubject = null) {
   await usersCollection.updateOne({ chatId }, { $set: updateData }, { upsert: true });
 }
 
-function chunkText(text, chunkSize = 1000, overlap = 150) {
+function chunkText(text, chunkSize = 600, overlap = 150) {
   const chunks = [];
   let i = 0;
   while (i < text.length) {
@@ -409,7 +409,7 @@ function setupBotListeners() {
       let history = user.history || [];
       let currentSystemPrompt = systemPrompt;
 
-      let contextHistory = history.length > 20 ? history.slice(-20) : history;
+      let contextHistory = history.length > 9 ? history.slice(-9) : history;
       let docs = user.documents || {};
       
       const relevantChunk = searchRelevantChunks(userText, docs, user.lastSubject);
