@@ -373,7 +373,8 @@ function setupBotListeners() {
         if (loadingMsgId) {
           bot.deleteMessage(chatId, loadingMsgId).catch(()=>{});
         }
-        bot.sendMessage(chatId, finalReply, { parse_mode: 'Markdown' });
+        bot.sendMessage(chatId, finalReply);
+
       } else {
         bot.sendMessage(chatId, "تعذر الاتصال بالذكاء الاصطناعي.");
       }
