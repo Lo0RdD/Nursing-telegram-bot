@@ -2,32 +2,138 @@ const TelegramBot = require('node-telegram-bot-api');
 const fetch = require('node-fetch');
 const http = require('http');
 
-// 1. قراءة التوكن والمفاتيح من بيئة العمل
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
-// 2. توجيه أكاديمي تمريضي مباشر
+// ذاكرة المؤقتة لآخر 6 رسائل لكل مستخدم
+const userHistory = {};
+
 const systemPrompt = `أنت رفيق معرفي أكاديمي لمستخدم بمسار موسوعي يدرس التمريض. أجب بدقة وعمق علمي وبشكل مباشر لأغراض التعليم والبحث الأكاديمي.`;
 
-const selectedModels = [
-  "openai/gpt-oss-120b",
-  "qwen/qwen3.8-27b",
-  "openai/gpt-oss-20b"
-];
+// 1. أمر البداية مع أزرار تفاعلية
+bot.onText(/\/start/, (msg) => {
+  const chatId = msg.chat.id;
+  const opts = {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "🩺 اختبرني بسؤال تمريضي (Quiz)", callback_data: "generate_quiz" }],
+        [{ text: "🗑️ مسح ذاكرة المحادثة", callback_data: "clear_memory" }]
+      ]
+    }
+  };
+  bot.sendMessage(chatId, "أهلاً بك! البوت جاهز الآن بميزات مطوّرة:\n\n• إرسال الأسئلة النصية بحفظ السياق.\n• إرسال صور المحاضرات والمخططات لتحليلها.\n• خيار الاختبارات الفلاشية السريعة.", opts);
+});
 
-// 3. الاستجابة لرسائل تلغرام
+// 2. معالجة الضغط على الأزرار التفاعلية
+bot.on('callback_query', async (query) => {
+  const chatId = query.message.chat.id;
+  
+  if (query.data === 'clear_memory') {
+    userHistory[chatId] = [];
+    bot.answerCallbackQuery(query.id, { text: "تم مسح الذاكرة بنجاح!" });
+    return bot.sendMessage(chatId, "🧹 تم مسح الذاكرة المؤقتة. يمكنك البدء بموضوع جديد الآن.");
+  }
+
+  if (query.data === 'generate_quiz') {
+    bot.answerCallbackQuery(query.id, { text: "جاري إنشاء سؤال..." });
+    bot.sendChatAction(chatId, 'typing');
+    
+    try {
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${GROQ_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "openai/gpt-oss-120b",
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: "اطرح عليّ سؤالاً تمريضياً متعدد الخيارات (MCQ) مع 4 خيارات، دون إعطاء الإجابة الصحيحة فوراً، واطلب مني اختيار الإجابة." }
+          ],
+          temperature: 0.7
+        })
+      });
+      const data = await response.json();
+      const quizText = data.choices[0]?.message?.content;
+      bot.sendMessage(chatId, `📝 **سؤال اختباري:**\n\n${quizText}`, { parse_mode: 'Markdown' });
+    } catch (e) {
+      bot.sendMessage(chatId, "تعذر إنشاء السؤال حالياً، حاول مرة أخرى.");
+    }
+  }
+});
+
+// 3. معالجة الصور (Vision - OCR وتحليل)
+bot.on('photo', async (msg) => {
+  const chatId = msg.chat.id;
+  const caption = msg.caption || "اشرح واقرأ ما يوجد في هذه الصورة بدقة علمية وتمريضية.";
+
+  bot.sendChatAction(chatId, 'typing');
+
+  try {
+    const photo = msg.photo[msg.photo.length - 1]; // الحصول على أعلى دقة
+    const fileLink = await bot.getFileLink(photo.file_id);
+
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${GROQ_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "llama-3.2-11b-vision-preview",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: caption },
+              { type: "image_url", image_url: { url: fileLink } }
+            ]
+          }
+        ],
+        temperature: 0.4
+      })
+    });
+
+    const data = await response.json();
+    if (data.choices && data.choices[0]?.message?.content) {
+      bot.sendMessage(chatId, `📷 **تحليل الصورة:**\n\n${data.choices[0].message.content}`);
+    } else {
+      bot.sendMessage(chatId, "تعذر تحليل الصورة، تأكد من وضوح النص فيها.");
+    }
+  } catch (e) {
+    console.log("خطأ في تحليل الصورة:", e.message);
+    bot.sendMessage(chatId, "حدث خطأ أثناء معالجة الصورة عبر نموذج الرؤية.");
+  }
+});
+
+// 4. معالجة الرسائل النصية مع الذاكرة (Memory Context)
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const userMessage = msg.text;
 
-  if (!userMessage || userMessage.startsWith('/start')) {
-    return bot.sendMessage(chatId, "أهلاً بك! أنا جاهز لمساعدتك في دراستك الأكاديمية والتمريضية.");
+  if (!userMessage || userMessage.startsWith('/') || msg.photo) return;
+
+  bot.sendChatAction(chatId, 'typing');
+
+  // تهيئة الذاكرة للمستخدم
+  if (!userHistory[chatId]) userHistory[chatId] = [];
+
+  // إضافة رسالة المستخدم للذاكرة
+  userHistory[chatId].push({ role: "user", content: userMessage });
+
+  // الحفاظ على آخر 6 رسائل فقط لتجنب تجاوز الحجم
+  if (userHistory[chatId].length > 6) {
+    userHistory[chatId] = userHistory[chatId].slice(-6);
   }
 
-  // إرسال إشارة "جاري الكتابة..."
-  bot.sendChatAction(chatId, 'typing');
+  const selectedModels = [
+    "openai/gpt-oss-120b",
+    "qwen/qwen3.8-27b",
+    "openai/gpt-oss-20b"
+  ];
 
   let replied = false;
 
@@ -43,7 +149,7 @@ bot.on('message', async (msg) => {
           model: model,
           messages: [
             { role: "system", content: systemPrompt },
-            { role: "user", content: userMessage }
+            ...userHistory[chatId]
           ],
           temperature: 0.5,
           max_tokens: 2000
@@ -55,6 +161,9 @@ bot.on('message', async (msg) => {
       if (data.choices && data.choices[0]?.message?.content) {
         const content = data.choices[0].message.content.trim();
         if (content.length > 0) {
+          // إضافة رد البوت للذاكرة
+          userHistory[chatId].push({ role: "assistant", content: content });
+          
           await bot.sendMessage(chatId, `${content}\n\n---\n🤖 *النموذج المستخدم:* \`${model}\``, { parse_mode: 'Markdown' });
           replied = true;
           break;
@@ -70,13 +179,11 @@ bot.on('message', async (msg) => {
   }
 });
 
-// 4. سيرفر وهمي لإرضاء Render ومنع خطأ الـ Port
+// سيرفر الـ Port الخاص بـ Render
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Bot is running live!');
+  res.end('Bot is running live with Advanced Features!');
 }).listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
 });
-
-console.log("البوت يعمل بنجاح...");
