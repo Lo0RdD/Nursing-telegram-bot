@@ -7,41 +7,17 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
 console.log("🔥 APP INITIALIZING...");
-if (!TELEGRAM_TOKEN) console.error("❌ ERROR: TELEGRAM_TOKEN is missing!");
-if (!GROQ_API_KEY) console.error("❌ ERROR: GROQ_API_KEY is missing!");
-
-// استخدام المكتبة الرسمية لدعم الأزرار (Callback Queries) بكفاءة عالية
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
 const db = {
   history: {},
   activeQuizzes: {},
   activeFlashcards: {},
-  documents: {},
-  preferences: {}
+  documents: {}
 };
 
-const activeRequests = {}; 
+const activeRequests = {};
 const systemPrompt = `أنت مساعد أكاديمي محترف لطالب تمريض. التزم بالدقة العلمية ولا تقم بتأليف معلومات غير موجودة.`;
-
-async function sendLongMessage(chatId, text, extra = {}) {
-  const MAX_LENGTH = 4000;
-  if (!text) return;
-  if (text.length <= MAX_LENGTH) {
-    try { return await bot.sendMessage(chatId, text, extra); } 
-    catch (e) { delete extra.parse_mode; return await bot.sendMessage(chatId, text, extra); }
-  }
-  const parts = [];
-  let currentIndex = 0;
-  while (currentIndex < text.length) {
-    parts.push(text.substring(currentIndex, currentIndex + MAX_LENGTH));
-    currentIndex += MAX_LENGTH;
-  }
-  for (const part of parts) {
-    try { await bot.sendMessage(chatId, part, extra); } 
-    catch (e) { delete extra.parse_mode; await bot.sendMessage(chatId, part, extra); }
-  }
-}
 
 function chunkText(text, chunkSize = 1200, overlap = 200) {
   const chunks = [];
@@ -77,46 +53,28 @@ async function callGroqAPI(messages, model = "openai/gpt-oss-120b", maxTokens = 
       { model, messages, temperature: 0.3, max_tokens: maxTokens },
       { headers: { Authorization: `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" }, timeout: 8000 }
     );
-    
     let content = response.data?.choices?.[0]?.message?.content || null;
-    if (!content) {
-      console.error("Groq returned empty content:", response.data);
-      return null;
-    }
+    if (!content) return null;
     
     if (isJson) {
       try {
         const jsonMatch = content.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) {
-          console.error("No JSON found:", content);
-          return null;
-        }
+        if (!jsonMatch) return null;
         return JSON.parse(jsonMatch[0]);
-      } catch (jsonError) {
-        console.error("JSON parse error:", jsonError.message);
+      } catch (e) {
         return null;
       }
     }
     return content;
   } catch (error) {
-    if (error.response) {
-      console.error(`Groq API Error ${error.response.status}:`, error.response.data);
-    } else if (error.code === "ECONNABORTED") {
-      console.error("Groq API Timeout");
-    } else {
-      console.error("Groq Network Error:", error.message);
-    }
     return null;
   }
 }
 
 function validateQuiz(data) {
   if (!data) return false;
-  if (typeof data.question !== "string") return false;
-  if (!data.options) return false;
-  if (typeof data.options.A !== "string" || typeof data.options.B !== "string" || typeof data.options.C !== "string" || typeof data.options.D !== "string") return false;
+  if (typeof data.question !== "string" || !data.options) return false;
   if (!["A", "B", "C", "D"].includes(String(data.correctAnswer).toUpperCase())) return false;
-  if (typeof data.explanation !== "string") return false;
   data.correctAnswer = String(data.correctAnswer).toUpperCase();
   return true;
 }
@@ -125,8 +83,7 @@ function getStudyContext(chatId) {
   if (db.documents[chatId] && db.documents[chatId].length > 0) {
     const docs = db.documents[chatId];
     const randomStart = Math.floor(Math.random() * Math.max(1, docs.length - 2));
-    const chunks = docs.slice(randomStart, randomStart + 2).join("\n\n");
-    return `[المصدر: ملزمة الطالب]\n${chunks}`;
+    return `[المصدر: ملزمة الطالب]\n${docs.slice(randomStart, randomStart + 2).join("\n\n")}`;
   }
   if (db.history[chatId] && db.history[chatId].length > 0) {
     return `[المصدر: آخر نقاشاتنا]\n${db.history[chatId].slice(-4).map(m => m.content).join("\n")}`;
@@ -134,17 +91,9 @@ function getStudyContext(chatId) {
   return "أساسيات التمريض العامة";
 }
 
-// الأوامر الأساسية
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
-  if (!db.history[chatId]) db.history[chatId] = [];
-  if (!db.documents[chatId]) db.documents[chatId] = [];
-
-  const welcomeMessage = `أهلاً بك في منصة التمريض الأكاديمية! 🩺\n\n` +
-    `• 📄 أرسل ملزمة PDF لقراءتها.\n` +
-    `• 🎓 أرسل /study لفتح قائمة أوضاع الدراسة.\n` +
-    `أنا جاهز لخدمتك!`;
-  sendLongMessage(chatId, welcomeMessage);
+  bot.sendMessage(chatId, "أهلاً بك في منصة التمريض الأكاديمية! 🩺\n\nأرسل /study لفتح أوضاع الدراسة.");
 });
 
 bot.onText(/\/study/, (msg) => {
@@ -156,190 +105,93 @@ bot.onText(/\/study/, (msg) => {
       [{ text: '📝 اختبار سريع (Quiz)', callback_data: 'mode_quiz' }]
     ]
   };
-  bot.sendMessage(chatId, '📚 **اختر وضع الدراسة الذي تفضله الآن:**', { parse_mode: 'Markdown', reply_markup: options });
+  bot.sendMessage(chatId, '📚 **اختر وضع الدراسة الذي تفضله الآن:**', { reply_markup: options });
 });
 
-// معالجة الأزرار بضمان كامل
-bot.on('callback_query', async (callbackQuery) => {
-  const { message, data: action, id } = callbackQuery;
-  const chatId = message.chat.id;
-  
-  // إلغاء حالة التحميل للزر فوراً
-  bot.answerCallbackQuery(id).catch(()=>{});
+// معالجة الأزرار بشكل مباشر ومضمون
+bot.on('callback_query', async (query) => {
+  console.log("🔥 BUTTON CLICKED:", query.data);
+  const chatId = query.message.chat.id;
+  const action = query.data;
+
+  // إرسال تنبيه فوري لتيليجرام لإنهاء حالة التحميل للزر
+  bot.answerCallbackQuery(query.id).catch(() => {});
 
   if (action === 'flip_flashcard') {
-    const flashcard = db.activeFlashcards[chatId];
-    if (flashcard) {
-      bot.sendMessage(chatId, `✅ **الشرح:**\n${flashcard.definition}`, { parse_mode: 'Markdown' });
+    const fc = db.activeFlashcards[chatId];
+    if (fc) {
+      bot.sendMessage(chatId, `✅ **الشرح:**\n${fc.definition}`);
       delete db.activeFlashcards[chatId];
     } else {
-      bot.sendMessage(chatId, "البطاقة غير موجودة. اطلب /study لبطاقة جديدة.");
+      bot.sendMessage(chatId, "انتهت صلاحية البطاقة، اطلب /study جديدة.");
     }
     return;
   }
 
-  if (activeRequests[chatId]) {
-    return bot.sendMessage(chatId, "⏳ ما زلت أجهز لك الطلب السابق، انتظر قليلًا.");
-  }
-  
-  activeRequests[chatId] = true;
-  let loadingMsg;
+  bot.sendMessage(chatId, "⏳ جاري توليد المادة العلمية...");
 
   try {
-    loadingMsg = await bot.sendMessage(chatId, '⏳ جاري تجهيز المادة العلمية...');
-    if (!db.history[chatId]) db.history[chatId] = [];
     const studyContext = getStudyContext(chatId);
 
     if (action === 'mode_quiz') {
-      const quizRequest = `Based on: ${studyContext}
-Generate ONE NCLEX-style MCQ. Output ONLY a valid JSON object:
-{
-  "question": "The question in English",
-  "options": { "A": "Option A", "B": "Option B", "C": "Option C", "D": "Option D" },
-  "correctAnswer": "A",
-  "explanation": "Detailed explanation in ARABIC"
-}`;
-      
-      let quizData = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: quizRequest }], "openai/gpt-oss-120b", 1000, true);
-      if (!quizData) quizData = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: quizRequest }], "llama-3.3-70b-versatile", 1000, true);
-      
-      if (quizData && validateQuiz(quizData)) {
-        db.activeQuizzes[chatId] = quizData; 
-        const quizText = `📝 **Nursing Quiz:**\n\n${quizData.question}\n\nA) ${quizData.options.A}\nB) ${quizData.options.B}\nC) ${quizData.options.C}\nD) ${quizData.options.D}\n\n👉 *أجب بكتابة الحرف (A, B, C, D) للتقييم الفوري!*`;
-        bot.deleteMessage(chatId, loadingMsg.message_id).catch(()=>{});
-        bot.sendMessage(chatId, quizText, { parse_mode: 'Markdown' });
+      const prompt = `Based on: ${studyContext}\nGenerate ONE NCLEX-style MCQ. Output ONLY a valid JSON object:\n{"question": "Q", "options": {"A": "1", "B": "2", "C": "3", "D": "4"}, "correctAnswer": "A", "explanation": "شرح بالعربي"}`;
+      let data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "openai/gpt-oss-120b", 1000, true);
+      if (!data) data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "llama-3.3-70b-versatile", 1000, true);
+
+      if (data && validateQuiz(data)) {
+        db.activeQuizzes[chatId] = data;
+        bot.sendMessage(chatId, `📝 **Quiz:**\n\n${data.question}\n\nA) ${data.options.A}\nB) ${data.options.B}\nC) ${data.options.C}\nD) ${data.options.D}\n\n👉 *أجب بحرف الخيار فقط (A, B, C, D)*`);
       } else {
-        bot.editMessageText("عذراً، فشل توليد الاختبار.", { chat_id: chatId, message_id: loadingMsg.message_id });
+        bot.sendMessage(chatId, "عذراً، فشل توليد الاختبار.");
       }
-
     } else if (action === 'mode_flashcard') {
-      const fcRequest = `Based on: ${studyContext}\nExtract one important nursing term. Output ONLY a valid JSON object:\n{"term": "Term in English", "definition": "Definition in Arabic"}`;
+      const prompt = `Based on: ${studyContext}\nExtract one nursing term. Output ONLY JSON:\n{"term": "Term", "definition": "تعريف بالعربي"}`;
+      let data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "openai/gpt-oss-120b", 800, true);
+      if (!data) data = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "llama-3.3-70b-versatile", 800, true);
 
-      let fcData = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: fcRequest }], "openai/gpt-oss-120b", 800, true);
-      if (!fcData) fcData = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: fcRequest }], "llama-3.3-70b-versatile", 800, true);
-      
-      if (fcData && fcData.term) {
-        db.activeFlashcards[chatId] = fcData;
-        bot.deleteMessage(chatId, loadingMsg.message_id).catch(()=>{});
-        bot.sendMessage(chatId, `🎴 **مصطلح طبي:**\n\n**${fcData.term}**\n\n🤔 فكر في الإجابة ثم اضغط الزر:`, {
-          parse_mode: 'Markdown',
+      if (data && data.term) {
+        db.activeFlashcards[chatId] = data;
+        bot.sendMessage(chatId, `🎴 **مصطلح:** **${data.term}**\n\nاضغط لقلب البطاقة:`, {
           reply_markup: { inline_keyboard: [[{ text: 'قلب البطاقة 🔄', callback_data: 'flip_flashcard' }]] }
         });
       } else {
-        bot.editMessageText("فشل توليد البطاقة.", { chat_id: chatId, message_id: loadingMsg.message_id });
+        bot.sendMessage(chatId, "فشل توليد البطاقة.");
       }
-
     } else if (action === 'mode_clinical') {
-      const caseRequest = `Based on: ${studyContext}\nGenerate a short clinical case study. End with: "What is the priority nursing intervention?" in English. Add clinical hints in Arabic.`;
-      
-      let caseText = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: caseRequest }], "openai/gpt-oss-120b", 1000);
-      if (!caseText) caseText = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: caseRequest }], "llama-3.3-70b-versatile", 1000);
-      
-      if (caseText) {
-        db.history[chatId].push({ role: "assistant", content: caseText }); 
-        bot.deleteMessage(chatId, loadingMsg.message_id).catch(()=>{});
-        sendLongMessage(chatId, `👨‍⚕️ **حالة سريرية:**\n\n${caseText}\n\n👉 *اكتب تدخلك التمريضي لنتناقش!*`);
+      const prompt = `Based on: ${studyContext}\nGenerate a short clinical case study ending with: "What is the priority nursing intervention?" with Arabic hints.`;
+      let text = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "openai/gpt-oss-120b", 1000);
+      if (!text) text = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], "llama-3.3-70b-versatile", 1000);
+
+      if (text) {
+        bot.sendMessage(chatId, `👨‍⚕️ **حالة سريرية:**\n\n${text}`);
       } else {
-        bot.editMessageText("تعذر توليد الحالة السريرية.", { chat_id: chatId, message_id: loadingMsg.message_id });
+        bot.sendMessage(chatId, "تعذر توليد الحالة السريرية.");
       }
     }
   } catch (e) {
-    if (loadingMsg) bot.editMessageText("حدث خطأ غير متوقع.", { chat_id: chatId, message_id: loadingMsg.message_id }).catch(()=>{});
-  } finally {
-    delete activeRequests[chatId];
+    bot.sendMessage(chatId, "حدث خطأ أثناء المعالجة.");
   }
 });
 
-// قراءة ملف الـ PDF
-bot.on('document', async (msg) => {
-  const chatId = msg.chat.id;
-  const doc = msg.document;
-
-  if (!doc.mime_type || !doc.mime_type.includes('pdf')) return bot.sendMessage(chatId, "أرسل PDF فقط.");
-  const loadingMsg = await bot.sendMessage(chatId, '⏳ جاري استخراج النصوص من الملزمة...');
-
-  try {
-    const fileLink = await bot.getFileLink(doc.file_id);
-    const response = await axios.get(fileLink, { responseType: 'arraybuffer' });
-    const pdfData = await pdfParse(response.data);
-    const pdfText = pdfData.text.trim();
-
-    if (!pdfText || pdfText.length < 20) {
-      return bot.editMessageText("عذراً، الملف فارغ أو مصور.", { chat_id: chatId, message_id: loadingMsg.message_id });
-    }
-
-    db.documents[chatId] = chunkText(pdfText, 1200, 200); 
-    if (!db.history[chatId]) db.history[chatId] = [];
-
-    bot.editMessageText(`📚 **تمت فهرسة الملزمة بنجاح!** (${db.documents[chatId].length} قسم)\n\n✅ الملزمة جاهزة. استخدم /study للاختبار.`, { parse_mode: 'Markdown', chat_id: chatId, message_id: loadingMsg.message_id });
-  } catch (e) {
-    bot.editMessageText("حدث خطأ أثناء فهرسة الملف.", { chat_id: chatId, message_id: loadingMsg.message_id });
-  }
-});
-
-// الرسائل والمحادثة وتقييم الكويز
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
-  const userMessage = msg.text ? msg.text.trim() : "";
+  const text = msg.text ? msg.text.trim() : "";
+  if (!text || text.startsWith('/')) return;
 
-  if (!userMessage || userMessage.startsWith('/') || msg.document) return;
-
-  const activeQuiz = db.activeQuizzes[chatId];
-  if (activeQuiz && /^[A-Da-d]$/.test(userMessage)) {
-    const userChoice = userMessage.toUpperCase();
-    const isCorrect = userChoice === activeQuiz.correctAnswer;
-    const icon = isCorrect ? "✅ **إجابة صحيحة! أحسنت!**" : "❌ **إجابة خاطئة.**";
-    const replyText = `${icon}\n\nالإجابة الصحيحة هي: **${activeQuiz.correctAnswer}**\n\n📝 **الشرح الأكاديمي:**\n${activeQuiz.explanation}`;
-    delete db.activeQuizzes[chatId]; 
-    return bot.sendMessage(chatId, replyText, { parse_mode: 'Markdown' });
+  const quiz = db.activeQuizzes[chatId];
+  if (quiz && /^[A-Da-d]$/.test(text)) {
+    const isCorrect = text.toUpperCase() === quiz.correctAnswer;
+    const res = isCorrect ? "✅ إجابة صحيحة!" : "❌ إجابة خاطئة.";
+    bot.sendMessage(chatId, `${res}\nالإجابة: ${quiz.correctAnswer}\n\nالشرح:\n${quiz.explanation}`);
+    delete db.activeQuizzes[chatId];
+    return;
   }
 
-  if (activeRequests[chatId]) {
-    return bot.sendMessage(chatId, "⏳ جاري معالجة طلبك السابق، يرجى الانتظار ثواني...");
-  }
-  activeRequests[chatId] = true;
-  bot.sendChatAction(chatId, 'typing').catch(()=>{});
-  
-  try {
-    if (!db.history[chatId]) db.history[chatId] = [];
-    let currentSystemPrompt = systemPrompt;
-    
-    if (db.documents[chatId] && db.documents[chatId].length > 0) {
-      const relevantChunks = searchRelevantChunks(userMessage, db.documents[chatId], 2);
-      if (relevantChunks.length > 0) {
-        const documentContext = relevantChunks.join("\n\n...[فاصل المادة]...\n\n");
-        currentSystemPrompt += `\n\n[مقتطفات من ملزمة الطالب]:\n${documentContext}\n\nأجب بناءً على المقتطفات فقط. إذا كانت المقتطفات لا تكفي، صرّح بذلك.`;
-      }
-    }
-
-    const tempMessages = [
-      { role: "system", content: currentSystemPrompt },
-      ...db.history[chatId],
-      { role: "user", content: userMessage }
-    ];
-
-    let content = await callGroqAPI(tempMessages, "openai/gpt-oss-120b", 1000);
-    if (!content) content = await callGroqAPI(tempMessages, "llama-3.3-70b-versatile", 1000);
-    
-    if (content) {
-      db.history[chatId].push({ role: "user", content: userMessage });
-      db.history[chatId].push({ role: "assistant", content: content });
-      if (db.history[chatId].length > 6) db.history[chatId] = db.history[chatId].slice(-6); 
-      sendLongMessage(chatId, content);
-    } else {
-      bot.sendMessage(chatId, "عذراً، تعذر الاتصال بالسيرفر.");
-    }
-  } catch (e) {
-    bot.sendMessage(chatId, "حدث خطأ في النظام.");
-  } finally {
-    delete activeRequests[chatId];
-  }
+  bot.sendMessage(chatId, `وصلت رسالتك: ${text}`);
 });
 
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Bot active with TelegramBot Library');
-}).listen(PORT, () => {
-  console.log(`🔥 HTTP Server running on port ${PORT}`);
-});
+  res.end('Bot active');
+}).listen(PORT);
