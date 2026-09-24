@@ -3,7 +3,7 @@ const axios = require('axios');
 const http = require('http');
 const pdfParse = require('pdf-parse');
 const { MongoClient } = require('mongodb');
-const FormData = require('form-data'); // المكتبة الجديدة للتعامل مع الصوت
+const FormData = require('form-data'); 
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
@@ -31,16 +31,17 @@ const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const ramDB = {
   activeQuizzes: {},
   activeFlashcards: {},
-  activeRequests: {}
+  activeRequests: {},
+  pendingDocs: {} 
 };
 
 const systemPrompt = `أنت مساعد أكاديمي محترف لطالب تمريض. التزم بالدقة العلمية ولا تقم بتأليف معلومات غير موجودة.`;
 
 async function getUser(chatId) {
-  if (!usersCollection) return { history: [], documents: [] };
+  if (!usersCollection) return { history: [], documents: {} };
   let user = await usersCollection.findOne({ chatId });
   if (!user) {
-    user = { chatId, history: [], documents: [] };
+    user = { chatId, history: [], documents: {} };
     await usersCollection.insertOne(user);
   }
   return user;
@@ -86,14 +87,26 @@ function searchRelevantChunks(query, chunks, topN = 2) {
 
 async function getStudyContext(chatId) {
   const user = await getUser(chatId);
-  if (user.documents && user.documents.length > 0) {
-    const randomStart = Math.floor(Math.random() * Math.max(1, user.documents.length - 2));
-    return `[المصدر: ملزمة الطالب Mapped PDF]\n${user.documents.slice(randomStart, randomStart + 2).join("\n\n")}`;
+  let docs = user.documents;
+  
+  if (Array.isArray(docs)) docs = { "General": docs };
+
+  const subjects = Object.keys(docs || {});
+  
+  if (subjects.length > 0) {
+    const randomSubject = subjects[Math.floor(Math.random() * subjects.length)];
+    const subjectChunks = docs[randomSubject];
+    
+    if (subjectChunks && subjectChunks.length > 0) {
+      const randomStart = Math.floor(Math.random() * Math.max(1, subjectChunks.length - 2));
+      return `[المصدر: ملزمة ${randomSubject}]\n${subjectChunks.slice(randomStart, randomStart + 2).join("\n\n")}`;
+    }
   }
+
   if (user.history && user.history.length > 0) {
     return `[المصدر: آخر نقاشاتنا]\n${user.history.slice(-10).map(m => m.content).join("\n")}`;
   }
-  return "أساسيات التمريض العامة (Nursing Fundamentals)";
+  return "مواضيع التمريض العامة";
 }
 
 async function callGroqAPI(messages, model = "openai/gpt-oss-120b", maxTokens = 1200, isJson = false) {
@@ -126,7 +139,7 @@ function validateQuiz(data) {
 
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
-  bot.sendMessage(chatId, "أهلاً بك في منصة التمريض الأكاديمية! 🩺\n\n• 📄 أرسل ملزمة PDF لقراءتها.\n• 🎤 أرسل رسالة صوتية وسأفهمها فوراً!\n• 🎓 أرسل /study لفتح أوضاع الدراسة.");
+  bot.sendMessage(chatId, "أهلاً بك في منصة التمريض الأكاديمية! 🩺\n\n• 📄 أرسل ملزمة PDF لتصنيفها وقراءتها.\n• 🎤 أرسل رسالة صوتية وسأفهمها فوراً!\n• 🎓 أرسل /study لفتح أوضاع الدراسة.");
 });
 
 bot.onText(/\/study/, (msg) => {
@@ -146,7 +159,7 @@ bot.on('document', async (msg) => {
   const doc = msg.document;
 
   if (!doc.mime_type || !doc.mime_type.includes('pdf')) return bot.sendMessage(chatId, "أرسل ملفات PDF فقط.");
-  const loadingMsg = await bot.sendMessage(chatId, '⏳ جاري استخراج النصوص وحفظها...');
+  const loadingMsg = await bot.sendMessage(chatId, '⏳ جاري قراءة الملزمة وتحليلها...');
 
   try {
     const fileLink = await bot.getFileLink(doc.file_id);
@@ -157,9 +170,24 @@ bot.on('document', async (msg) => {
     if (!pdfText || pdfText.length < 20) return bot.editMessageText("عذراً، الملف فارغ أو مصور.", { chat_id: chatId, message_id: loadingMsg.message_id });
 
     const chunks = chunkText(pdfText, 1200, 200);
-    await saveUserDocuments(chatId, chunks);
+    
+    ramDB.pendingDocs[chatId] = chunks;
 
-    bot.editMessageText(`📚 **تمت فهرسة الملزمة بنجاح!** (${chunks.length} قسم)\n\nاستخدم /study للاختبار أو اسألني عنها بصوتك!`, { chat_id: chatId, message_id: loadingMsg.message_id });
+    // المجلدات الجديدة المخصصة
+    const options = {
+      inline_keyboard: [
+        [{ text: '🤰 نسائية', callback_data: 'tag_نسائية' }],
+        [{ text: '📊 طرائق البحث', callback_data: 'tag_طرائق البحث' }],
+        [{ text: '🍎 تغذية', callback_data: 'tag_تغذية' }],
+        [{ text: '👥 علم الاجتماع', callback_data: 'tag_علم الاجتماع' }]
+      ]
+    };
+
+    bot.editMessageText(`📚 **تم استخراج النصوص بنجاح!** (${chunks.length} قسم)\n\n👇 **إلى أي مادة تنتمي هذه الملزمة؟** (اختر لكي يتم حفظها في مكتبتك):`, { 
+      chat_id: chatId, 
+      message_id: loadingMsg.message_id,
+      reply_markup: options
+    });
   } catch (e) {
     bot.editMessageText("حدث خطأ أثناء الفهرسة.", { chat_id: chatId, message_id: loadingMsg.message_id });
   }
@@ -170,6 +198,29 @@ bot.on('callback_query', async (query) => {
   const action = query.data;
 
   bot.answerCallbackQuery(query.id).catch(() => {});
+
+  if (action.startsWith('tag_')) {
+    const subject = action.split('_')[1];
+    const chunks = ramDB.pendingDocs[chatId];
+    
+    if (!chunks) return bot.sendMessage(chatId, "عذراً، انتهت صلاحية الجلسة. يرجى رفع الملزمة مجدداً.");
+
+    bot.sendMessage(chatId, "⏳ جاري حفظ الملزمة في مكتبتك الدائمة...");
+    
+    const user = await getUser(chatId);
+    let docs = user.documents;
+    
+    if (Array.isArray(docs)) docs = { "General": docs };
+    if (!docs) docs = {};
+
+    if (!docs[subject]) docs[subject] = [];
+    docs[subject] = docs[subject].concat(chunks);
+
+    await saveUserDocuments(chatId, docs);
+    delete ramDB.pendingDocs[chatId]; 
+
+    return bot.sendMessage(chatId, `✅ **تم الأرشفة!**\nحُفظت الملزمة بنجاح في قسم: **${subject}** 📁\nالآن كل الأزرار والاختبارات ستكون أدق وأكثر تنظيماً.`);
+  }
 
   if (action === 'flip_flashcard') {
     const fc = ramDB.activeFlashcards[chatId];
@@ -184,7 +235,7 @@ bot.on('callback_query', async (query) => {
 
   if (ramDB.activeRequests[chatId]) return bot.sendMessage(chatId, "⏳ يرجى الانتظار، أعالج طلبك السابق...");
   ramDB.activeRequests[chatId] = true;
-  const loadingMsg = await bot.sendMessage(chatId, "⏳ جاري تجهيز المادة العلمية...");
+  const loadingMsg = await bot.sendMessage(chatId, "⏳ جاري تجهيز المادة العلمية من مكتبتك...");
 
   try {
     const studyContext = await getStudyContext(chatId);
@@ -234,7 +285,6 @@ bot.on('callback_query', async (query) => {
   }
 });
 
-// استقبال الرسائل الصوتية والنصية
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   if (msg.document || (msg.text && msg.text.startsWith('/'))) return;
@@ -242,7 +292,6 @@ bot.on('message', async (msg) => {
   let userText = "";
   let loadingMsgId = null;
 
-  // معالجة الصوت
   if (msg.voice) {
     if (ramDB.activeRequests[chatId]) return bot.sendMessage(chatId, "⏳ يرجى الانتظار...");
     ramDB.activeRequests[chatId] = true;
@@ -251,11 +300,9 @@ bot.on('message', async (msg) => {
     loadingMsgId = loadingMsg.message_id;
     
     try {
-      // تحميل الملف الصوتي من تيليجرام
       const fileLink = await bot.getFileLink(msg.voice.file_id);
       const audioRes = await axios.get(fileLink, { responseType: 'arraybuffer' });
       
-      // إرساله لـ Whisper
       const form = new FormData();
       form.append('file', audioRes.data, { filename: 'voice.ogg', contentType: 'audio/ogg' });
       form.append('model', 'whisper-large-v3');
@@ -277,7 +324,6 @@ bot.on('message', async (msg) => {
 
   if (!userText) return;
 
-  // حل الكويز
   const quiz = ramDB.activeQuizzes[chatId];
   if (quiz && /^[A-Da-d]$/.test(userText)) {
     const isCorrect = userText.toUpperCase() === quiz.correctAnswer;
@@ -297,8 +343,18 @@ bot.on('message', async (msg) => {
     let history = user.history || [];
     let currentSystemPrompt = systemPrompt;
 
-    if (user.documents && user.documents.length > 0) {
-      const relevantChunks = searchRelevantChunks(userText, user.documents, 2);
+    let docs = user.documents;
+    if (Array.isArray(docs)) docs = { "General": docs };
+
+    let allChunks = [];
+    if (docs) {
+        Object.values(docs).forEach(subjectChunks => {
+            allChunks = allChunks.concat(subjectChunks);
+        });
+    }
+
+    if (allChunks.length > 0) {
+      const relevantChunks = searchRelevantChunks(userText, allChunks, 2);
       if (relevantChunks.length > 0) {
         const documentContext = relevantChunks.join("\n\n...[فاصل المادة]...\n\n");
         currentSystemPrompt += `\n\n[مقتطفات من ملزمة الطالب]:\n${documentContext}\n\nأجب بناءً على المقتطفات فقط.`;
@@ -326,7 +382,6 @@ bot.on('message', async (msg) => {
 
       const finalReply = `${content}\n\n*(تم الرد بواسطة: ${usedModel})*`;
       
-      // إذا كان يرسل بصوته، نمسح رسالة "أنت قلت.." ونرسل الرد مباشرة لتنظيف المحادثة، أو نرسلها كرسالة جديدة
       if (msg.voice && loadingMsgId) {
           bot.sendMessage(chatId, finalReply);
       } else {
@@ -346,5 +401,5 @@ bot.on('message', async (msg) => {
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Bot active with Whisper Voice AI');
+  res.end('Bot active with Tagged PDF Library');
 }).listen(PORT, () => console.log(`🔥 Server running on port ${PORT}`));
