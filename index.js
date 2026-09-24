@@ -55,7 +55,6 @@ async function getUser(chatId) {
   return user;
 }
 
-// التعديل الجديد: حفظ كامل المحادثة في قاعدة البيانات بدون أي حذف
 async function saveUserHistory(chatId, history) {
   await usersCollection.updateOne({ chatId }, { $set: { history: history } }, { upsert: true });
 }
@@ -76,6 +75,7 @@ function chunkText(text, chunkSize = 1000, overlap = 150) {
   return chunks;
 }
 
+// دالة البحث المحدثة: تعطي الأولوية القصوى للملزمة الأخيرة
 function searchRelevantChunks(query, allDocsObject, lastSubject) {
   if (!allDocsObject) return null;
   
@@ -89,16 +89,27 @@ function searchRelevantChunks(query, allDocsObject, lastSubject) {
   const queryLower = query.toLowerCase();
   
   if (queryLower.includes('ترجم') || queryLower.includes('اول') || queryLower.includes('صفحة') || queryLower.includes('ملف') || queryLower.includes('ملزمة')) {
-    return recentChunks[0] || allChunks[0]; 
+    if (recentChunks.length > 0) {
+      return recentChunks[0]; 
+    }
   }
 
   const queryWords = queryLower.split(/\s+/).filter(w => w.length > 2 && !['هل','ما','كيف','اشرحلي','اشرح', 'ترجم'].includes(w));
+  
+  for (let chunk of recentChunks) {
+      const chunkLower = chunk.toLowerCase();
+      for (let word of queryWords) {
+          if (chunkLower.includes(word)) return chunk;
+      }
+  }
+
   for (let chunk of allChunks) {
     const chunkLower = chunk.toLowerCase();
     for (let word of queryWords) {
       if (chunkLower.includes(word)) return chunk;
     }
   }
+  
   return recentChunks[0] || allChunks[0];
 }
 
@@ -371,9 +382,7 @@ function setupBotListeners() {
       let history = user.history || [];
       let currentSystemPrompt = systemPrompt;
 
-      // التعديل هنا: اقتطاع آخر 20 رسالة فقط ليتم إرسالها للذكاء الاصطناعي بدلاً من التاريخ الكامل
       let contextHistory = history.length > 20 ? history.slice(-20) : history;
-
       let docs = user.documents || {};
       
       const relevantChunk = searchRelevantChunks(userText, docs, user.lastSubject);
@@ -384,7 +393,7 @@ function setupBotListeners() {
 
       const tempMessages = [
         { role: "system", content: currentSystemPrompt },
-        ...contextHistory, // إرسال الجزء المقتطع فقط
+        ...contextHistory, 
         { role: "user", content: userText }
       ];
 
@@ -396,7 +405,6 @@ function setupBotListeners() {
       }
 
       if (content) {
-        // دفع الرسائل الجديدة إلى المصفوفة الكاملة وحفظها في قاعدة البيانات
         history.push({ role: "user", content: userText }, { role: "assistant", content: content });
         await saveUserHistory(chatId, history); 
 
