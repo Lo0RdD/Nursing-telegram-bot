@@ -34,6 +34,12 @@ async function initDBAndBot() {
     console.log("✅ MongoDB Connected Successfully!");
     
     bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
+    
+    // 1. إضافة Polling Error Listener للتشخيص
+    bot.on('polling_error', (error) => {
+      console.error('❌ TELEGRAM POLLING ERROR:', error.code, error.message);
+    });
+
     setupBotListeners();
   } catch (err) {
     console.error("❌ MongoDB Connection Error:", err);
@@ -188,6 +194,12 @@ function setupBotListeners() {
     const action = query.data;
     bot.answerCallbackQuery(query.id).catch(() => {});
 
+    // 2. حماية الـ Callbacks من الأزرار القديمة أو غير المعروفة
+    const validActions = ['mode_quiz', 'mode_flashcard', 'mode_clinical', 'flip_flashcard'];
+    if (!action.startsWith('tag_') && !validActions.includes(action)) {
+      return bot.sendMessage(chatId, "⚠️ هذا الزر لم يعد صالحاً. أرسل /study من جديد.");
+    }
+
     if (action.startsWith('tag_')) {
       const subject = action.substring(4); 
       const chunks = ramDB.pendingDocs[chatId];
@@ -219,7 +231,6 @@ function setupBotListeners() {
 
     if (ramDB.activeRequests[chatId]) return bot.sendMessage(chatId, "⏳ يرجى الانتظار...");
     
-    // إصلاح ثغرة القفل (Lock Safety)
     ramDB.activeRequests[chatId] = true;
     let loadingMsg;
 
