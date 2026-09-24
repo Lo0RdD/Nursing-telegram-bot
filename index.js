@@ -8,16 +8,14 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
-// هيكل الذاكرة المطورة (جاهز للتحويل لقاعدة بيانات لاحقاً)
 const db = {
-  users: {}, // تخزين تفضيلات المستخدمين
-  history: {}, // سجل المحادثات
-  quizzes: {} // تتبع الكويزات النشطة
+  history: {},
+  activeQuizzes: {} // تتبع حالة الكويز النشط لكل مستخدم لمعرفة الإجابة الصحيحة
 };
 
 const systemPrompt = `أنت رفيق معرفي أكاديمي محترف في مجال التمريض. تقدم إجابات دقيقة، علمية، ومنظمة لطلبة التمريض والمهتمين بالقطاع الصحي.`;
 
-// دالة تقسيم وإرسال الرسائل الطويلة لتجنب حدود تيليجرام
+// دالة تقسيم وإرسال الرسائل الطويلة
 async function sendLongMessage(chatId, text, extra = {}) {
   const MAX_LENGTH = 4000;
   if (!text) return;
@@ -26,7 +24,6 @@ async function sendLongMessage(chatId, text, extra = {}) {
     try {
       return await bot.sendMessage(chatId, text, extra);
     } catch (e) {
-      // لو فشل بـ Markdown، أرسله كنص عادي تفادياً للتعطل
       delete extra.parse_mode;
       return await bot.sendMessage(chatId, text, extra);
     }
@@ -49,7 +46,7 @@ async function sendLongMessage(chatId, text, extra = {}) {
   }
 }
 
-// دالة الاتصال المضمونة بـ Groq API
+// دالة الاتصال بـ Groq API
 async function callGroqAPI(messages, model = "openai/gpt-oss-120b", maxTokens = 1500) {
   try {
     const response = await axios.post(
@@ -75,15 +72,15 @@ async function callGroqAPI(messages, model = "openai/gpt-oss-120b", maxTokens = 
   }
 }
 
-// 1. أمر البداية /start (لا يحذف السجل القديم بل يرحب بالمستخدم فقط)
+// 1. أمر البداية /start
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   if (!db.history[chatId]) db.history[chatId] = [];
 
-  const welcomeMessage = `أهلاً بك مجدداً في منصة التمريض الأكاديمية! 🩺\n\n` +
-    `• يمكنك مناقشة أي موضوع علمي أو إرسال ملزمة PDF للتلخيص.\n` +
-    `• اكتب /quiz في أي وقت لاختبارك بناءً على آخر النقاشات.\n` +
-    `• ابدأ لطفاَ بطرح سؤالك أو رفع ملفك الدراسي!`;
+  const welcomeMessage = `أهلاً بك في منصة التمريض الأكاديمية! 🩺\n\n` +
+    `• ناقش أي موضوع علمي أو أرسل ملزمة PDF للتلخيص.\n` +
+    `• اكتب /quiz لاختبارك بناءً على آخر النقاشات (السؤال بالإنجليزية والشرح بالعربية).\n` +
+    `• أجب باختيار الحرف (A, B, C, D) وسأقوم بتقييم إجابتك فوراً!`;
 
   sendLongMessage(chatId, welcomeMessage);
 });
@@ -101,8 +98,13 @@ bot.onText(/\/quiz/, async (msg) => {
     }
 
     const recentContext = history.slice(-6);
-    const quizPrompt = `Based SPECIFICALLY on the MOST RECENT nursing topics/documents in our conversation above, generate ONE high-yield academic NCLEX-style nursing multiple-choice question (MCQ) in ENGLISH. 
-Provide 4 options (A, B, C, D). Clearly specify the correct answer at the very end in a hidden format or keep track so you can validate user answers (e.g., "Correct Answer: B"). Provide a brief explanation.`;
+    
+    // توجيه دقيق: السؤال بالإنجليزية، وتحديد الحرف الصحيح بشكل خفي للنظام، والشرح مستقبلاً بالعربية
+    const quizPrompt = `Based SPECIFICALLY on the MOST RECENT nursing topics or documents in our conversation above, generate ONE high-yield academic NCLEX-style nursing multiple-choice question (MCQ).
+CRITICAL FORMAT RULES:
+1. The Question and Options (A, B, C, D) must be strictly in ENGLISH.
+2. At the very end of your response, include a hidden or clear tag for the correct answer like this format: [CORRECT: X] (where X is A, B, C, or D).
+3. Do NOT provide the explanation or correct answer in the main text yet; wait for the user to answer.`;
 
     const messages = [
       { role: "system", content: systemPrompt },
@@ -118,8 +120,20 @@ Provide 4 options (A, B, C, D). Clearly specify the correct answer at the very e
     clearInterval(typingInterval);
 
     if (quizText) {
-      db.history[chatId].push({ role: "assistant", content: quizText });
-      sendLongMessage(chatId, `📝 **Nursing Quiz (NCLEX-Style):**\n\n${quizText}`);
+      // استخراج الحرف الصحيح من الرد لتخزينه واختبار إجابة المستخدم لاحقاً
+      const match = quizText.match(/\[CORRECT:\s*([A-Da-d])\]/i);
+      const correctAnswer = match ? match[1].toUpperCase() : null;
+
+      // حفظ حالة الكويز النشط لهذا المستخدم
+      db.activeQuizzes[chatId] = {
+        correctAnswer: correctAnswer,
+        fullQuizText: quizText
+      };
+
+      // إخفاء وسم الإجابة الصحيحة عن المستخدم كي لا يراه مباشرة
+      const cleanQuizText = quizText.replace(/\[CORRECT:\s*[A-Da-d]\]/i, '').trim();
+
+      sendLongMessage(chatId, `📝 **Nursing Quiz (NCLEX-Style):**\n\n${cleanQuizText}\n\n👉 *أجب الآن بكتابة الحرف فقط (A, B, C, أو D)*`);
     } else {
       sendLongMessage(chatId, "حدث خطأ أثناء توليد الكويز. حاول مرة أخرى.");
     }
@@ -148,12 +162,11 @@ bot.on('document', async (msg) => {
     const pdfText = pdfData.text.trim();
     if (!pdfText || pdfText.length < 20) {
       clearInterval(typingInterval);
-      return sendLongMessage(chatId, "عذراً، لم أستطع استخراج النصوص من هذا الملف (قد يكون مسحوباً كصور).");
+      return sendLongMessage(chatId, "عذراً، لم أستطع استخراج النصوص من هذا الملف.");
     }
 
-    // تجهيز النص للاستيعاب الذكي
     const trimmedText = pdfText.substring(0, 5000);
-    const summaryPrompt = `إليك محتوى من ملزمة PDF أرسلها الطالب:\n\n${trimmedText}\n\nقدم تلخيصاً أكاديمياً شاملاً لأهم المفاهيم، النقاط السريرية، والتدخلات التمريضية المرتبطة بهذا المحتوى.`;
+    const summaryPrompt = `إليك محتوى من ملزمة PDF أرسلها الطالب:\n\n${trimmedText}\n\nقدم تلخيصاً أكاديمياً شاملاً لأهم المفاهيم، النقاط السريرية، والتدخلات التمريضية المرتبطة بهذا المحتوى باللغة العربية.`;
 
     const summary = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: summaryPrompt }], "openai/gpt-oss-120b", 2000);
 
@@ -161,32 +174,63 @@ bot.on('document', async (msg) => {
 
     if (summary) {
       if (!db.history[chatId]) db.history[chatId] = [];
-      db.history[chatId].push({ role: "user", content: `[ملف PDF مرفق - محتوى مستخرج]` });
+      db.history[chatId].push({ role: "user", content: `[ملف PDF مرفق]` });
       db.history[chatId].push({ role: "assistant", content: summary });
 
       if (db.history[chatId].length > 12) db.history[chatId] = db.history[chatId].slice(-12);
 
-      sendLongMessage(chatId, `📄 **تلخيص الملزمة الأكاديمية:**\n\n${summary}\n\n---\n💡 *يمكنك الآن طرح أسئلة تفصيلية حول الملزمة أو إرسال /quiz لاختبارك منها!*`);
+      sendLongMessage(chatId, `📄 **تلخيص الملزمة الأكاديمية:**\n\n${summary}\n\n---\n💡 *يمكنك الآن طرح أسئلة أو إرسال /quiz لاختبارك منها!*`);
     } else {
       sendLongMessage(chatId, "تعذر تلخيص الملزمة حالياً.");
     }
   } catch (e) {
     clearInterval(typingInterval);
-    console.error("PDF Error:", e.message);
     sendLongMessage(chatId, "حدث خطأ أثناء معالجة ملف الـ PDF.");
   }
 });
 
-// 4. المحادثة النصية العامة
+// 4. المحادثة النصية العامة والتعامل مع إجابات الـ Quiz
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
-  const userMessage = msg.text;
+  const userMessage = msg.text ? msg.text.trim() : "";
 
   if (!userMessage || userMessage.startsWith('/') || msg.document) return;
 
   let typingInterval = setInterval(() => { bot.sendChatAction(chatId, 'typing').catch(()=>{}); }, 3000);
 
   try {
+    // التحقق هل أرسل المستخدم إجابة على كويز نشط (مثل A, B, C, D)
+    const activeQuiz = db.activeQuizzes[chatId];
+    if (activeQuiz && /^[A-Da-d]$/.test(userMessage)) {
+      const userChoice = userMessage.toUpperCase();
+      const isCorrect = activeQuiz.correctAnswer && userChoice === activeQuiz.correctAnswer;
+
+      // بناء طلب تقييم الإجابة بحيث يكون الشرح بالعربية
+      const evaluationPrompt = `The user is answering a nursing quiz question.
+The original question was:
+${activeQuiz.fullQuizText}
+
+The correct answer is: ${activeQuiz.correctAnswer || "Not specified"}
+The user's selected answer is: ${userChoice}
+
+Please evaluate the user's answer. 
+Provide a clear response in ARABIC language (اللغة العربية فقط):
+1. State whether the answer is correct or incorrect (إجابة صحيحة ✅ أو إجابة خاطئة ❌).
+2. Provide a detailed academic nursing explanation in ARABIC explaining why this option is correct/incorrect and reviewing the clinical concept.`;
+
+      let evaluation = await callGroqAPI([{ role: "system", content: systemPrompt }, { role: "user", content: evaluationPrompt }], "openai/gpt-oss-120b", 1200);
+      
+      // إزالة الكويز النشط من الذاكرة كي لا يعلق عليه
+      delete db.activeQuizzes[chatId];
+
+      clearInterval(typingInterval);
+
+      if (evaluation) {
+        return sendLongMessage(chatId, evaluation);
+      }
+    }
+
+    // إذا لم تكن إجابة كويز، تتم معاملتها كمحادثة نصية عادية
     if (!db.history[chatId]) db.history[chatId] = [];
 
     const tempMessages = [
@@ -216,7 +260,6 @@ bot.on('message', async (msg) => {
       sendLongMessage(chatId, "عذراً، لم يتلق البوت استجابة من السيرفر. أعد إرسال رسالتك.");
     }
   } catch (e) {
-    clearInterval(typingMarkdownError => {});
     clearInterval(typingInterval);
     sendLongMessage(chatId, "حدث خطأ في النظام.");
   }
