@@ -9,9 +9,7 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const MONGO_URI = process.env.MONGO_URI;
 
-// ضع رابط موقعك على Render هنا (مثال: https://nursing-bot.onrender.com)
-// أو دعه يتعرف عليه تلقائياً إذا أضفت متغير بيئة، لكن يفضل وضع الرابط الثابت مباشرة
-const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || "https://nursing-telegram-bot.onrender.com"; // استبدل الرابط برابط موقعك الحقيقي على Render
+const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || "https://lord-bot.onrender.com";
 
 console.log("🔥 APP INITIALIZING...");
 
@@ -39,7 +37,7 @@ const ramDB = {
   pendingDocs: {} 
 };
 
-const systemPrompt = `أنت مساعد أكاديمي محترف لطالب تمريض. التزم بالدقة العلمية ولا تقم بتأليف معلومات غير موجودة. كن مباشراً وواضحاً في الإجابة.`;
+const systemPrompt = `أنت مساعد أكاديمي محترف لطالب تمريض. لديك حق الوصول إلى ملازم الطالب في قاعدة البيانات. إذا طلب الطالب شرحاً أو سأل عن محتوى ملزمة، أجب بناءً على النصوص المتاحة ولا تنكر وجود الملفات.`;
 
 async function getUser(chatId) {
   if (!usersCollection) return { history: [], documents: {} };
@@ -72,45 +70,40 @@ function chunkText(text, chunkSize = 1000, overlap = 150) {
   return chunks;
 }
 
-function searchRelevantChunks(query, chunks, topN = 1) {
-  if (!chunks || chunks.length === 0) return [];
-  const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 1 && !['هل','ما','كيف','اشرحلي','اشرح','اللي','من'].includes(w));
-  if (queryWords.length === 0) return []; 
+// دالة بحث محسنة: إذا لم توجد كلمات مفتاحية دقيقة، تعيد أول قسم افتراضياً لضمان عدم ضياع السياق
+function searchRelevantChunks(query, allDocsObject) {
+  if (!allDocsObject) return null;
   
-  const scoredChunks = chunks.map(chunk => {
-    let score = 0;
-    const chunkLower = chunk.toLowerCase();
-    queryWords.forEach(word => { if (chunkLower.includes(word)) score += 1; });
-    return { chunk, score };
+  // جمع كل الملازم من كل الأقسام
+  let allChunks = [];
+  Object.values(allDocsObject).forEach(subjectChunks => {
+    if (Array.isArray(subjectChunks)) {
+      allChunks = allChunks.concat(subjectChunks);
+    }
   });
-  
-  scoredChunks.sort((a, b) => b.score - a.score);
-  if (scoredChunks[0].score === 0) return []; 
-  return scoredChunks.slice(0, topN).map(c => c.chunk);
-}
 
-async function getStudyContext(chatId) {
-  const user = await getUser(chatId);
-  let docs = user.documents;
-  
-  if (Array.isArray(docs)) docs = { "General": docs };
+  if (allChunks.length === 0) return null;
 
-  const subjects = Object.keys(docs || {});
+  const queryLower = query.toLowerCase();
+  // إذا طلب شرح الملزمة بشكل عام، نعيد محتوى من الملزمة مباشرة
+  if (queryLower.includes('ملزمة') || queryLower.includes('اشرح') || queryLower.includes('ملف') || queryLower.includes('محتوى')) {
+    return allChunks[0]; // نعيد أول جزء من أحدث ملزمة
+  }
+
+  // البحث الذكي بالكلمات المفتاحية
+  const queryWords = queryLower.split(/\s+/).filter(w => w.length > 2 && !['هل','ما','كيف','اشرحلي','اشرح','اللي','من','في','على'].includes(w));
   
-  if (subjects.length > 0) {
-    const randomSubject = subjects[Math.floor(Math.random() * subjects.length)];
-    const subjectChunks = docs[randomSubject];
-    
-    if (subjectChunks && subjectChunks.length > 0) {
-      const randomStart = Math.floor(Math.random() * Math.max(1, subjectChunks.length - 1));
-      return `[المصدر: ملزمة ${randomSubject}]\n${subjectChunks[randomStart]}`;
+  for (let chunk of allChunks) {
+    const chunkLower = chunk.toLowerCase();
+    for (let word of queryWords) {
+      if (chunkLower.includes(word)) {
+        return chunk;
+      }
     }
   }
-
-  if (user.history && user.history.length > 0) {
-    return `[المصدر: آخر نقاشاتنا]\n${user.history.slice(-4).map(m => m.content).join("\n")}`;
-  }
-  return "مواضيع التمريض العامة";
+  
+  // إن لم تجد تطابقاً دقيقاً، تعيد أول جزء افتراضياً ليبقى البوت واعياً بوجود ملزمة مرفوعة
+  return allChunks[0];
 }
 
 async function callGroqAPI(messages, model = "openai/gpt-oss-120b", maxTokens = 800, isJson = false) {
@@ -243,7 +236,18 @@ bot.on('callback_query', async (query) => {
   const loadingMsg = await bot.sendMessage(chatId, "⏳ جاري تجهيز المادة العلمية من مكتبتك...");
 
   try {
-    const studyContext = await getStudyContext(chatId);
+    const user = await getUser(chatId);
+    let studyContext = "مواضيع التمريض العامة";
+    let docs = user.documents;
+    if (Array.isArray(docs)) docs = { "General": docs };
+    
+    let allChunks = [];
+    if (docs) {
+      Object.values(docs).forEach(arr => { if(Array.isArray(arr)) allChunks = allChunks.concat(arr); });
+    }
+    if (allChunks.length > 0) {
+      studyContext = `[مقتطف من مكتبة ملازمك]:\n${allChunks[Math.floor(Math.random() * allChunks.length)]}`;
+    }
 
     if (action === 'mode_quiz') {
       const prompt = `Based strictly on this context: ${studyContext}\nGenerate ONE NCLEX-style MCQ. Output ONLY a valid JSON object:\n{"question": "Q in English", "options": {"A": "1", "B": "2", "C": "3", "D": "4"}, "correctAnswer": "A", "explanation": "شرح مفصل بالعربي"}`;
@@ -351,18 +355,10 @@ bot.on('message', async (msg) => {
     let docs = user.documents;
     if (Array.isArray(docs)) docs = { "General": docs };
 
-    let allChunks = [];
-    if (docs) {
-        Object.values(docs).forEach(subjectChunks => {
-            allChunks = allChunks.concat(subjectChunks);
-        });
-    }
-
-    if (allChunks.length > 0) {
-      const relevantChunks = searchRelevantChunks(userText, allChunks, 1);
-      if (relevantChunks.length > 0) {
-        currentSystemPrompt += `\n\n[مقتطف من الملزمة]:\n${relevantChunks[0]}\n\nأجب بناءً على هذا المقتطف.`;
-      }
+    // استدعاء دالة البحث المحسنة لضمان جلب نص من الملزمة عند الطلب العام
+    const relevantChunk = searchRelevantChunks(userText, docs);
+    if (relevantChunk) {
+      currentSystemPrompt += `\n\n[محتوى من ملزمة الطالب المرفوعة مسبقاً]:\n${relevantChunk}\n\nأجب على الطالب مستعيناً بهذا المحتوى إذا كان له علاقة بسؤاله.`;
     }
 
     const tempMessages = [
@@ -404,12 +400,11 @@ http.createServer((req, res) => {
 }).listen(PORT, () => {
   console.log(`🔥 Server running on port ${PORT}`);
 
-  // آلية منع النوم (Self-Ping): يقوم السيرفر بطلب نفسه كل 9 دقائق ليبقي السيرفر مستيقظاً دائماً
   if (RENDER_EXTERNAL_URL) {
     setInterval(() => {
       axios.get(RENDER_EXTERNAL_URL)
         .then(() => console.log("🔄 Keep-Alive Ping sent successfully!"))
         .catch(err => console.log("⚠️ Keep-Alive Ping failed:", err.message));
-    }, 9 * 60 * 1000); // كل 9 دقائق
+    }, 9 * 60 * 1000);
   }
 });
