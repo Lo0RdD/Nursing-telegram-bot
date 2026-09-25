@@ -115,7 +115,6 @@ function searchRelevantChunks(query, allDocsObject, lastSubject) {
 // تم جعل Llama في المقدمة ليتم اختباره ورؤيته في الـ Logs
 async function callGroqAPI(messages, maxTokens = 800, isJson = false) {
   const modelsSequence = [
-    "llama-3.3-70b-versatile",
     "openai/gpt-oss-120b",
     "qwen/qwen3.8-27b"
   ];
@@ -454,7 +453,8 @@ Include a brief Arabic hint at the very end. Do not use JSON, just text.`;
 
       if (apiResult && apiResult.data) {
         let content = apiResult.data;
-        let usedModel = apiResult.usedModel.includes('70b') ? "Llama-70B" : apiResult.usedModel.includes('gpt') ? "GPT-120B" : "Qwen-27B";
+        let usedModel = apiResult.usedModel.includes('gpt') ? "GPT-120B" : "Qwen-27B";
+
 
         history.push({ role: "user", content: userText }, { role: "assistant", content: content });
         await saveUserHistory(chatId, history); 
