@@ -66,7 +66,6 @@ async function saveUserDocuments(chatId, documents, lastSubject = null) {
 }
 
 function chunkText(text, chunkSize = 2000, overlap = 400) {
-
   const chunks = [];
   let i = 0;
   while (i < text.length) {
@@ -113,7 +112,6 @@ function searchRelevantChunks(query, allDocsObject, lastSubject) {
   return recentChunks[0] || allChunks[0];
 }
 
-// تم جعل Llama في المقدمة ليتم اختباره ورؤيته في الـ Logs
 async function callGroqAPI(messages, maxTokens = 800, isJson = false) {
   const modelsSequence = [
     "openai/gpt-oss-120b",
@@ -170,33 +168,35 @@ function validateQuiz(data) {
 }
 
 function setupBotListeners() {
-      bot.onText(/\/testapi/, async (msg) => {
+  
+  bot.onText(/\/start/, (msg) => {
+    bot.sendMessage(msg.chat.id, "أهلاً بك في منصة التمريض الأكاديمية! 🩺\n\n• 📄 أرسل ملزمة لتصنيفها.\n• 🎤 أرسل بصمة صوتية.\n• 🎓 أرسل /study للوضع الأكاديمي.");
+  });
+
+  bot.onText(/\/testapi/, async (msg) => {
     const chatId = msg.chat.id;
-    bot.sendMessage(chatId, "⏳ جاري فحص المفتاح الجديد...");
+    bot.sendMessage(chatId, "⏳ جاري فحص المفتاح الجديد بنموذج Opus 5.5...");
     
     try {
       const response = await axios.post("https://codecraftapi.com/v1/chat/completions", {
-        model: "gpt-5.6-luna", 
+        model: "opus-5.5", 
         messages: [{ role: "user", content: "هل تسمعني؟ أجب بكلمة 'شغال' فقط." }]
       }, {
         headers: {
-          "Authorization": "Bearer cc_plltqHCRuCsovQVqHhuxsD5MeKAx4bGkbWXXhDWrR8Lbvrao",
+          "Authorization": "Bearer cc_EDG6FtqShWMH7pKVd3X4UK76evMejLBlC1Okaxyiv5w641MH",
           "Content-Type": "application/json"
         },
-        timeout: 10000
+        timeout: 20000 
       });
       
       const reply = response.data.choices[0].message.content;
-      bot.sendMessage(chatId, `✅ مبروك! المفتاح شغال والـ API متصل.\nرد النموذج: ${reply}`);
+      bot.sendMessage(chatId, `✅ مبروك! المفتاح شغال والـ API متصل.\nرد النموذج (Opus 5.5): ${reply}`);
       
     } catch (error) {
       const errorDetails = error.response ? JSON.stringify(error.response.data) : error.message;
       bot.sendMessage(chatId, `❌ فشل الاتصال.\nالسبب الدقيق: ${errorDetails}`);
     }
   });
-
-
-
 
   bot.onText(/\/reset/, async (msg) => {
     const chatId = msg.chat.id;
@@ -257,7 +257,6 @@ function setupBotListeners() {
       if (!pdfText || pdfText.length < 20) return bot.editMessageText("الملف فارغ أو مصور.", { chat_id: chatId, message_id: loadingMsg.message_id });
 
       ramDB.pendingDocs[chatId] = chunkText(pdfText, 2000, 400);
-
 
       bot.editMessageText(`👇 **إلى أي مادة تنتمي هذه الملزمة؟**`, { 
         chat_id: chatId, 
@@ -480,7 +479,6 @@ Include a brief Arabic hint at the very end. Do not use JSON, just text.`;
       if (apiResult && apiResult.data) {
         let content = apiResult.data;
         let usedModel = apiResult.usedModel.includes('gpt') ? "GPT-120B" : "Qwen-27B";
-
 
         history.push({ role: "user", content: userText }, { role: "assistant", content: content });
         await saveUserHistory(chatId, history); 
