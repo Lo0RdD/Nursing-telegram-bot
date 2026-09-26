@@ -436,7 +436,7 @@ Include a brief Arabic hint at the very end. Do not use JSON, just text.`;
       let history = user.history || [];
       let currentSystemPrompt = systemPrompt;
 
-      let contextHistory = history.length > 9 ? history.slice(-9) : history;
+      let contextHistory = history.length > 5 ? history.slice(-5) : history;
       let docs = user.documents || {};
       
       const relevantChunk = searchRelevantChunks(userText, docs, user.lastSubject);
