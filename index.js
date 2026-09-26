@@ -65,7 +65,8 @@ async function saveUserDocuments(chatId, documents, lastSubject = null) {
   await usersCollection.updateOne({ chatId }, { $set: updateData }, { upsert: true });
 }
 
-function chunkText(text, chunkSize = 600, overlap = 150) {
+function chunkText(text, chunkSize = 2000, overlap = 400) {
+
   const chunks = [];
   let i = 0;
   while (i < text.length) {
