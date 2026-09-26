@@ -232,7 +232,8 @@ function setupBotListeners() {
 
       if (!pdfText || pdfText.length < 20) return bot.editMessageText("الملف فارغ أو مصور.", { chat_id: chatId, message_id: loadingMsg.message_id });
 
-      ramDB.pendingDocs[chatId] = chunkText(pdfText, 600, 150);
+      ramDB.pendingDocs[chatId] = chunkText(pdfText, 2000, 400);
+
 
       bot.editMessageText(`👇 **إلى أي مادة تنتمي هذه الملزمة؟**`, { 
         chat_id: chatId, 
