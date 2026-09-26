@@ -173,14 +173,13 @@ function setupBotListeners() {
   bot.onText(/\/start/, (msg) => {
     bot.sendMessage(msg.chat.id, "أهلاً بك في منصة التمريض الأكاديمية! 🩺\n\n• 📄 أرسل ملزمة لتصنيفها.\n• 🎤 أرسل بصمة صوتية.\n• 🎓 أرسل /study للوضع الأكاديمي.");
   });
-  bot.onText(/\/testapi/, async (msg) => {
+    bot.onText(/\/testapi/, async (msg) => {
     const chatId = msg.chat.id;
     bot.sendMessage(chatId, "⏳ جاري فحص مفتاح Codecraft الخاص بك...");
     
     try {
-      // استخدمنا الرابط القياسي المعتاد لهذه المواقع
       const response = await axios.post("https://api.codecraftapi.com/v1/chat/completions", {
-        model: "gpt-4o", 
+        model: "gpt-5.6-luna", // 👈 تم تغيير اسم النموذج هنا ليتطابق مع الموقع
         messages: [{ role: "user", content: "هل تسمعني؟ أجب بكلمة 'شغال' فقط." }]
       }, {
         headers: {
@@ -191,13 +190,14 @@ function setupBotListeners() {
       });
       
       const reply = response.data.choices[0].message.content;
-      bot.sendMessage(chatId, `✅ مبروك! المفتاح شغال والـ API متصل.\nرد النموذج (GPT-4o): ${reply}`);
+      bot.sendMessage(chatId, `✅ مبروك! المفتاح شغال والـ API متصل.\nرد النموذج (GPT-5.6 Luna): ${reply}`);
       
     } catch (error) {
       console.error(error.message);
-      bot.sendMessage(chatId, `❌ للأسف فشل الاتصال. إما أن المفتاح منتهي، أو رابط السيرفر مختلف.\nالخطأ: ${error.message}`);
+      bot.sendMessage(chatId, `❌ للأسف فشل الاتصال.\nالخطأ: ${error.message}`);
     }
   });
+
 
   bot.onText(/\/reset/, async (msg) => {
     const chatId = msg.chat.id;
