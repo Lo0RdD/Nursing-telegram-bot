@@ -170,17 +170,13 @@ function validateQuiz(data) {
 }
 
 function setupBotListeners() {
-  bot.onText(/\/start/, (msg) => {
-    bot.sendMessage(msg.chat.id, "أهلاً بك في منصة التمريض الأكاديمية! 🩺\n\n• 📄 أرسل ملزمة لتصنيفها.\n• 🎤 أرسل بصمة صوتية.\n• 🎓 أرسل /study للوضع الأكاديمي.");
-  });
     bot.onText(/\/testapi/, async (msg) => {
     const chatId = msg.chat.id;
     bot.sendMessage(chatId, "⏳ جاري فحص مفتاح Codecraft الخاص بك...");
     
     try {
       const response = await axios.post("https://codecraftapi.com/v1/chat/completions", {
-
-        model: "gpt-5.6-luna", // 👈 تم تغيير اسم النموذج هنا ليتطابق مع الموقع
+        model: "gpt-5.6-luna", 
         messages: [{ role: "user", content: "هل تسمعني؟ أجب بكلمة 'شغال' فقط." }]
       }, {
         headers: {
@@ -198,6 +194,7 @@ function setupBotListeners() {
       bot.sendMessage(chatId, `❌ للأسف فشل الاتصال.\nالخطأ: ${error.message}`);
     }
   });
+
 
 
   bot.onText(/\/reset/, async (msg) => {
