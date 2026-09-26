@@ -170,9 +170,9 @@ function validateQuiz(data) {
 }
 
 function setupBotListeners() {
-    bot.onText(/\/testapi/, async (msg) => {
+      bot.onText(/\/testapi/, async (msg) => {
     const chatId = msg.chat.id;
-    bot.sendMessage(chatId, "⏳ جاري فحص مفتاح Codecraft الخاص بك...");
+    bot.sendMessage(chatId, "⏳ جاري فحص المفتاح الجديد...");
     
     try {
       const response = await axios.post("https://codecraftapi.com/v1/chat/completions", {
@@ -180,20 +180,21 @@ function setupBotListeners() {
         messages: [{ role: "user", content: "هل تسمعني؟ أجب بكلمة 'شغال' فقط." }]
       }, {
         headers: {
-          "Authorization": "Bearer cc_sQsXE2JCfRkORN1mUxyzarCGh5dYELqUcddjtp7FkjWeZRQV",
+          "Authorization": "Bearer cc_plltqHCRuCsovQVqHhuxsD5MeKAx4bGkbWXXhDWrR8Lbvrao",
           "Content-Type": "application/json"
         },
         timeout: 10000
       });
       
       const reply = response.data.choices[0].message.content;
-      bot.sendMessage(chatId, `✅ مبروك! المفتاح شغال والـ API متصل.\nرد النموذج (GPT-5.6 Luna): ${reply}`);
+      bot.sendMessage(chatId, `✅ مبروك! المفتاح شغال والـ API متصل.\nرد النموذج: ${reply}`);
       
     } catch (error) {
-      console.error(error.message);
-      bot.sendMessage(chatId, `❌ للأسف فشل الاتصال.\nالخطأ: ${error.message}`);
+      const errorDetails = error.response ? JSON.stringify(error.response.data) : error.message;
+      bot.sendMessage(chatId, `❌ فشل الاتصال.\nالسبب الدقيق: ${errorDetails}`);
     }
   });
+
 
 
 
