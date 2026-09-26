@@ -168,34 +168,8 @@ function validateQuiz(data) {
 }
 
 function setupBotListeners() {
-  
   bot.onText(/\/start/, (msg) => {
     bot.sendMessage(msg.chat.id, "أهلاً بك في منصة التمريض الأكاديمية! 🩺\n\n• 📄 أرسل ملزمة لتصنيفها.\n• 🎤 أرسل بصمة صوتية.\n• 🎓 أرسل /study للوضع الأكاديمي.");
-  });
-
-  bot.onText(/\/testapi/, async (msg) => {
-    const chatId = msg.chat.id;
-    bot.sendMessage(chatId, "⏳ جاري فحص المفتاح الجديد بنموذج Opus 5.5...");
-    
-    try {
-      const response = await axios.post("https://codecraftapi.com/v1/chat/completions", {
-        model: "opus-5.5", 
-        messages: [{ role: "user", content: "هل تسمعني؟ أجب بكلمة 'شغال' فقط." }]
-      }, {
-        headers: {
-          "Authorization": "Bearer cc_EDG6FtqShWMH7pKVd3X4UK76evMejLBlC1Okaxyiv5w641MH",
-          "Content-Type": "application/json"
-        },
-        timeout: 20000 
-      });
-      
-      const reply = response.data.choices[0].message.content;
-      bot.sendMessage(chatId, `✅ مبروك! المفتاح شغال والـ API متصل.\nرد النموذج (Opus 5.5): ${reply}`);
-      
-    } catch (error) {
-      const errorDetails = error.response ? JSON.stringify(error.response.data) : error.message;
-      bot.sendMessage(chatId, `❌ فشل الاتصال.\nالسبب الدقيق: ${errorDetails}`);
-    }
   });
 
   bot.onText(/\/reset/, async (msg) => {
